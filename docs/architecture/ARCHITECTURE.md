@@ -1,7 +1,7 @@
 # Water Level Monitoring System — Implementation Architecture
-**Version:** 3.0 — iOS app live; multi-tank / motor-group topology defined  
+**Version:** 4.0 — Phase 2A cloud sync infrastructure planned; AWS backend + multi-device support  
 **Hardware:** Seeed Studio XIAO ESP32-C6 + JSN-SR04T (Mode 0, trigger/echo) + Relay module  
-**Last updated:** iOS app navigation refactored to multi-device hub architecture; new views added
+**Last updated:** Phase 2A (Cloud Sync) requirements, implementation guide, and architecture design added
 
 ---
 
@@ -50,7 +50,61 @@
 - [x] `NotificationManager.swift` — UserNotifications framework; local alerts for low/high tank level with 5-minute spam prevention per device
 - [ ] Multi-tank dashboard — cards per tank, motor status indicators
 
-### Phase 2 Additions (after Phase 1 stable and single-tank proven)
+### Phase 2A — Cloud Sync Infrastructure (In Progress)
+
+#### AWS Backend
+- [ ] **DynamoDB** — readings table (device_id + timestamp key), GSI for date queries, TTL for 1-year retention
+- [ ] **RDS PostgreSQL** — users, profiles, devices, sync_queue, anomalies, insights tables
+- [ ] **API Gateway** — REST endpoints (POST /api/readings, GET /api/readings, CRUD /profiles, CRUD /devices)
+- [ ] **Lambda** — sync function with deduplication, reads from API Gateway, writes to DynamoDB + RDS
+- [ ] **AWS IoT Core** — MQTT broker, topics: tank/{device_id}/reading/live, config/request, config/response
+- [ ] **S3** — Daily backups of DynamoDB + RDS
+
+#### Device Firmware (Phase 2A)
+- [ ] Queue expansion: 2000 → 5000 capacity, metadata tracking per entry
+- [ ] ACK protocol: Device waits for app confirmation before clearing synced items
+- [ ] Cloud API sync: Batch 100 readings, POST to /api/readings, retry exponential backoff
+- [ ] MQTT publishing: Publish live readings to tank/{device_id}/reading/live every 30s
+- [ ] Queue persistence: Survives device reboot via NVS checkpoint
+
+#### iOS App (Phase 2A)
+- [ ] **SyncQueueItem** model — SwiftData, tracks pending→synced status, attempts, retry timestamps
+- [ ] **SyncQueueManager** — actor for thread-safe queue operations, network monitoring, auto-sync on connectivity restore
+- [ ] **Offline detection** — NWPathMonitor for WiFi/cellular status, queues readings when offline
+- [ ] **Cloud sync flow** — When online: push pending queue to cloud, receive ACK, clear local queue
+- [ ] **Multi-app sync** — App A uploads reading → Cloud → App B fetches via GET /api/readings (polling or MQTT subscription)
+- [ ] **UI status** — Settings tab shows "Cloud sync: Online / Offline / X pending readings"
+
+#### Documentation (Phase 2A)
+- [x] `docs/architecture/REQUIREMENTS.md` — Complete Phase 2 requirements (AI validation, cloud sync, multi-device)
+- [x] `docs/architecture/IMPLEMENTATION_TODO.md` — Detailed TODO list (2A/2B/2C phases, effort estimates)
+- [x] `docs/architecture/CLOUD_PERFORMANCE_ANALYSIS.md` — Firebase vs AWS vs Custom comparison
+- [x] `docs/api/PHASE_2A_AWS_IMPLEMENTATION.md` — Step-by-step AWS setup guide with CLI commands + code
+
+#### Integration Tests (Phase 2A)
+- [ ] DynamoDB deduplication: Send same reading twice, verify only one stored
+- [ ] Multi-app sync: App A reads, App B retrieves via REST, verify identical data
+- [ ] Queue persistence: App offline for 1h, queue 500+ readings, go online, sync completes without loss
+- [ ] MQTT subscription: Device publishes, multiple apps subscribe, all receive
+- [ ] Retry logic: Simulate cloud downtime, verify exponential backoff, no data loss
+
+#### Cost Estimate (AWS, Phase 2A)
+- DynamoDB: $1-5/month (on-demand, reads/writes)
+- RDS micro: $10-15/month (free tier or micro instance)
+- API Gateway: $3-5/month (1M requests free tier + overage)
+- Lambda: $5-10/month (1M free invocations + overage)
+- AWS IoT: $5-10/month (message volume)
+- **Total: $25-45/month** (significantly cheaper than Firebase at scale)
+
+#### Timeline: 3-4 weeks
+- **Week 1:** AWS setup (DynamoDB, RDS, API Gateway, Lambda)
+- **Week 2:** Device firmware + MQTT + iOS queue layer
+- **Week 3:** Integration testing + bug fixes
+- **Week 4:** Production deployment + monitoring
+
+---
+
+### Phase 2 Additions (after Phase 1 stable and Phase 2A deployed)
 - [ ] Node B firmware: relay driver, MQTT subscriber, motor automation
 - [ ] Tank Sensor: MQTT publish on each reading *(stub present in commsTask)*
 - [ ] Motor control UI: on/off, runtime display, auto-mode config
