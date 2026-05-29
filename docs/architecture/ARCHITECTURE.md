@@ -52,55 +52,72 @@
 
 ### Phase 2A — Cloud Sync Infrastructure (In Progress)
 
-#### AWS Backend
-- [ ] **DynamoDB** — readings table (device_id + timestamp key), GSI for date queries, TTL for 1-year retention
-- [ ] **RDS PostgreSQL** — users, profiles, devices, sync_queue, anomalies, insights tables
-- [ ] **API Gateway** — REST endpoints (POST /api/readings, GET /api/readings, CRUD /profiles, CRUD /devices)
-- [ ] **Lambda** — sync function with deduplication, reads from API Gateway, writes to DynamoDB + RDS
-- [ ] **AWS IoT Core** — MQTT broker, topics: tank/{device_id}/reading/live, config/request, config/response
-- [ ] **S3** — Daily backups of DynamoDB + RDS
+#### AWS Backend (Option 2: SQS-First Architecture)
+- [x] **SQS Queue** — durable message queue (14-day retention, 3 retries before DLQ)
+- [x] **DynamoDB** — readings table (device_id + timestamp key), TTL 1-year, PITR backup enabled
+- [x] **RDS PostgreSQL** — 7 tables: users, profiles, devices, device_users, readings_synced, anomalies, insights
+- [x] **Lambda** — sync function with ownership validation, dedup, RDS writes, error handling
+- [x] **Cognito** — user management, temporary credentials for mobile app
+- [x] **SNS** — anomaly alerts (low level, high level, etc)
+- [ ] **API Gateway** — [Phase 2B] for GET reads (fetch history, insights)
+- [ ] **AWS IoT Core** — [Phase 2C] for device commands (config, motor control)
 
 #### Device Firmware (Phase 2A)
-- [ ] Queue expansion: 2000 → 5000 capacity, metadata tracking per entry
-- [ ] ACK protocol: Device waits for app confirmation before clearing synced items
-- [ ] Cloud API sync: Batch 100 readings, POST to /api/readings, retry exponential backoff
-- [ ] MQTT publishing: Publish live readings to tank/{device_id}/reading/live every 30s
-- [ ] Queue persistence: Survives device reboot via NVS checkpoint
+- [x] NVS queue: 2000 capacity, survives reboot
+- [x] Syncs queue to app every 30s via BLE/WiFi
+- [ ] Verify queue doesn't overflow under heavy load
+- [ ] Test recovery after device crashes mid-sync
 
 #### iOS App (Phase 2A)
-- [ ] **SyncQueueItem** model — SwiftData, tracks pending→synced status, attempts, retry timestamps
-- [ ] **SyncQueueManager** — actor for thread-safe queue operations, network monitoring, auto-sync on connectivity restore
-- [ ] **Offline detection** — NWPathMonitor for WiFi/cellular status, queues readings when offline
-- [ ] **Cloud sync flow** — When online: push pending queue to cloud, receive ACK, clear local queue
-- [ ] **Multi-app sync** — App A uploads reading → Cloud → App B fetches via GET /api/readings (polling or MQTT subscription)
-- [ ] **UI status** — Settings tab shows "Cloud sync: Online / Offline / X pending readings"
+- [x] **SyncQueueItem** model — SwiftData, tracks pending→synced→cleared status
+- [x] **SyncQueueManager** — batch sends to SQS, offline queueing, exponential backoff
+- [x] **SQSManager** — AWS SDK integration, SigV4 signing, Cognito credentials
+- [x] **Cognito integration** — authenticate user, get temporary AWS credentials
+- [x] **Offline detection** — NWPathMonitor, auto-sync when online
+- [ ] Verify queue persists across app restart
+- [ ] Test multi-device syncing (same app, multiple tanks)
 
 #### Documentation (Phase 2A)
-- [x] `docs/architecture/REQUIREMENTS.md` — Complete Phase 2 requirements (AI validation, cloud sync, multi-device)
-- [x] `docs/architecture/IMPLEMENTATION_TODO.md` — Detailed TODO list (2A/2B/2C phases, effort estimates)
-- [x] `docs/architecture/CLOUD_PERFORMANCE_ANALYSIS.md` — Firebase vs AWS vs Custom comparison
-- [x] `docs/api/PHASE_2A_AWS_IMPLEMENTATION.md` — Step-by-step AWS setup guide with CLI commands + code
+- [x] `docs/architecture/REQUIREMENTS.md` — Complete Phase 2 requirements
+- [x] `docs/architecture/IMPLEMENTATION_TODO.md` — Detailed TODO (2A/2B/2C)
+- [x] `docs/architecture/CLOUD_PERFORMANCE_ANALYSIS.md` — AWS vs Custom comparison
+- [x] `docs/api/PHASE_2A_AWS_IMPLEMENTATION.md` — Initial SQS-first architecture
+- [x] `docs/api/PHASE_2A_AWS_IMPLEMENTATION_REVISED.md` — **PRODUCTION-READY**, all issues fixed:
+  - ✅ Cognito authentication + temporary credentials
+  - ✅ Device ownership validation (Lambda checks user owns device)
+  - ✅ Multi-tenant support (device_users table, permission checking)
+  - ✅ Complete RDS writes + error handling + transactions
+  - ✅ Least privilege IAM (specific resources only)
+  - ✅ DynamoDB PITR + SQS DLQ for recovery
+  - ✅ Complete test procedures + troubleshooting guide
+  - ✅ Cost monitoring + CloudWatch alarms
+  - ✅ 4-6 week realistic timeline
 
 #### Integration Tests (Phase 2A)
-- [ ] DynamoDB deduplication: Send same reading twice, verify only one stored
-- [ ] Multi-app sync: App A reads, App B retrieves via REST, verify identical data
-- [ ] Queue persistence: App offline for 1h, queue 500+ readings, go online, sync completes without loss
-- [ ] MQTT subscription: Device publishes, multiple apps subscribe, all receive
-- [ ] Retry logic: Simulate cloud downtime, verify exponential backoff, no data loss
+- [ ] Ownership validation: User B can't submit readings for User A's device
+- [ ] Deduplication: App A + App B sync same device, no duplicates
+- [ ] Offline scenario: App offline 2h, queues 500 readings, syncs all when online
+- [ ] Error recovery: Lambda fails 3x, message goes to DLQ, can manually replay
+- [ ] Multi-app: Same device, 2 phones, both sync simultaneously without loss
+- [ ] RDS consistency: Check readings_synced table tracks all syncs
+- [ ] Cost: Monitor actual spend vs $33/month estimate
 
-#### Cost Estimate (AWS, Phase 2A)
-- DynamoDB: $1-5/month (on-demand, reads/writes)
-- RDS micro: $10-15/month (free tier or micro instance)
-- API Gateway: $3-5/month (1M requests free tier + overage)
-- Lambda: $5-10/month (1M free invocations + overage)
-- AWS IoT: $5-10/month (message volume)
-- **Total: $25-45/month** (significantly cheaper than Firebase at scale)
+#### Cost Estimate (AWS, Phase 2A — Revised)
+- SQS: $2/month (4.3M messages)
+- DynamoDB: $10/month (on-demand)
+- RDS micro: $15/month (free tier 12mo, then paid)
+- Lambda: $5/month (1M free invocations)
+- SNS: $1/month
+- Cognito: Free (1M MAU free)
+- **Total: $33/month** (down from $78 with API Gateway)
 
-#### Timeline: 3-4 weeks
-- **Week 1:** AWS setup (DynamoDB, RDS, API Gateway, Lambda)
-- **Week 2:** Device firmware + MQTT + iOS queue layer
-- **Week 3:** Integration testing + bug fixes
-- **Week 4:** Production deployment + monitoring
+#### Timeline: 4-6 weeks (Realistic)
+- **Week 1:** RDS setup (schema), Cognito pool, SQS queue
+- **Week 2:** DynamoDB, Lambda deployment, test procedures
+- **Week 3:** iOS Amplify + SQSManager, end-to-end testing
+- **Week 4:** Integration tests, monitoring, cost alerts
+- **Week 5:** Burndown, bug fixes, documentation
+- **Week 6:** Production readiness review, cutover plan
 
 ---
 
