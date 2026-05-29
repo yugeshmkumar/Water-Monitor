@@ -1,0 +1,27 @@
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build/dependencies
+node_modules/
+venv/
+env/
+__pycache__/
+
+# Misc
+*.tmp
+*.bak
+.DS_Store

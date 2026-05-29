@@ -1,0 +1,47 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+.vscode-server/
+*.code-workspace
+
+# Build files
+build/
+dist/
+bin/
+*.elf
+*.hex
+*.bin
+
+# IDE
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+.git/
+node_modules/
+
+# Logs
+*.log
+debug.log
+
+# Misc
+*.tmp
+*.bak

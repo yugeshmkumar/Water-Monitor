@@ -1,0 +1,38 @@
+import Foundation
+import SwiftData
+
+@Model
+final class Tank {
+    var id: UUID
+    var displayName: String     // "Rooftop Tank", "Underground Cistern"
+    var location: String        // optional free-text location note
+    var sensorNodeID: String?   // nodeID of the Node A serving this tank
+    var tankEmptyCM: Double     // distance from sensor when tank is empty
+    var tankFullCM: Double      // distance from sensor when tank is full
+    var tankVolumeL: Int        // total capacity in litres
+    var alertLowPct: Int        // notify below this fill %
+    var alertHighPct: Int       // notify above this fill %
+    var createdAt: Date
+
+    @Relationship(deleteRule: .cascade)
+    var readings: [DeviceReading] = []
+
+    init(displayName: String,
+         sensorNodeID: String? = nil,
+         tankEmptyCM: Double = 150,
+         tankFullCM: Double = 20,
+         tankVolumeL: Int = 1000,
+         alertLowPct: Int = 15,
+         alertHighPct: Int = 95) {
+        self.id            = UUID()
+        self.displayName   = displayName
+        self.location      = ""
+        self.sensorNodeID  = sensorNodeID
+        self.tankEmptyCM   = tankEmptyCM
+        self.tankFullCM    = tankFullCM
+        self.tankVolumeL   = tankVolumeL
+        self.alertLowPct   = alertLowPct
+        self.alertHighPct  = alertHighPct
+        self.createdAt     = Date()
+    }
+}

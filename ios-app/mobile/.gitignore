@@ -1,0 +1,57 @@
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+build/
+DerivedData/
+*.pbxuser
+*.perspectivev3
+*.xcbkptlist
+*.moved-aside
+*.xccheckout
+*.playground
+
+# Swift Package Manager
+.build/
+.swiftpm/
+*.xcframework
+
+# CocoaPods
+Pods/
+Podfile.lock
+
+# Swift
+*.swiftdeps
+*.dSYM
+*.o
+*.a
+*.dylib
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.c9/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+__pycache__/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Misc
+.thumbs.db
+*.log
