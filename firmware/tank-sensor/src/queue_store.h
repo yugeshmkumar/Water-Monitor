@@ -64,11 +64,12 @@
 #pragma once
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include "constants.h"
 
 /**
  * QueueEntry — Single Buffered Reading
  *
- * Exactly 16 bytes (packed) to fit nicely in flash blocks.
+ * Exactly QUEUE_ENTRY_SIZE_BYTES (16) bytes (packed) to fit nicely in flash blocks.
  * Each entry stores one sensor reading with timestamp and metadata.
  *
  * Fields:
@@ -89,8 +90,8 @@ struct __attribute__((packed)) QueueEntry {
     uint8_t  sent;             // 1=app ack'd, 0=pending
     uint8_t  _pad;             // Alignment padding (unused)
 };
-// Compile-time check: struct must be exactly 16 bytes
-static_assert(sizeof(QueueEntry) == 16, "QueueEntry must be 16 bytes");
+// Compile-time check: struct must match QUEUE_ENTRY_SIZE_BYTES (16 bytes)
+static_assert(sizeof(QueueEntry) == QUEUE_ENTRY_SIZE_BYTES, "QueueEntry size must match QUEUE_ENTRY_SIZE_BYTES");
 
 /**
  * QueueStore — Persistent Circular Buffer for Offline Readings
@@ -197,8 +198,8 @@ public:
 
 private:
     // Configuration
-    static const uint16_t MAX_ENTRIES = 2000;  // Capacity limit
-    static const char*    FILE_PATH;           // LittleFS file path
+    static const uint16_t MAX_ENTRIES = QUEUE_MAX_ENTRIES;  // Capacity limit (from constants.h)
+    static const char*    FILE_PATH;                        // LittleFS file path
 
     // State
     uint32_t _nextSeq      = 1;      // Next sequence number to assign

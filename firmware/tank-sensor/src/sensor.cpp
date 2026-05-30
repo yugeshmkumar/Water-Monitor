@@ -6,7 +6,7 @@
 #include <math.h>
 
 static float kfState   = -1.0f;
-static float kfP       = 1000.0f;
+static float kfP       = KF_INITIAL_P;
 static int   kfRejects = 0;
 
 // Tolerance scales with tank size: 3 % of range, minimum 5 cm.
@@ -217,7 +217,7 @@ float readDistanceCM() {
 
 void resetSensorFilter() {
     kfState     = -1.0f;
-    kfP         = 1000.0f;
+    kfP         = KF_INITIAL_P;
     kfRejects   = 0;
     csState     = CS_SEEKING;
     csCount     = 0;

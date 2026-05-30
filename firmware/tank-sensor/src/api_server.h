@@ -9,7 +9,7 @@
  * - OTA firmware update support via ElegantOTA
  *
  * PORTS:
- * - Single AsyncWebServer on port 80 handles both REST and WebSocket
+ * - Single AsyncWebServer on HTTP_SERVER_PORT (80) handles both REST and WebSocket
  * - mDNS advertises device as {node_id}.local (e.g., sensor-a.local)
  *
  * REST ENDPOINTS:
@@ -43,16 +43,17 @@
 
 #pragma once
 #include <ESPAsyncWebServer.h>
+#include "constants.h"
 
 class ApiServer {
 public:
-    // Initialize server with default port 80 and /live WebSocket path
-    ApiServer() : _http(80), _ws("/live") {}
+    // Initialize server with HTTP_SERVER_PORT and /live WebSocket path
+    ApiServer() : _http(HTTP_SERVER_PORT), _ws("/live") {}
 
     /**
      * Start the HTTP server, mDNS, WebSocket, and OTA.
      * Called from commsTask during initialization.
-     * Blocks until server is listening on port 80.
+     * Blocks until server is listening on HTTP_SERVER_PORT.
      */
     void begin();
 

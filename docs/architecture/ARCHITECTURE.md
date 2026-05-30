@@ -10,7 +10,11 @@
   - error_handler.h: 11% → 65% documentation (error codes, recovery strategies, reporting)
   - queue_store.h: 12% → 70% documentation (circular buffer, flash wear analysis, ack flow)
   - state.h: minimal → 65% documentation (mutex strategy, task priorities, performance notes)
-- [ ] **Phase 2: Extract Magic Numbers** — 3 firmware issues (in progress)
+- [x] **Phase 2: Extract Magic Numbers** ✅ COMPLETE — 3 firmware issues fixed
+  - KF_INITIAL_P (1000.0f) Kalman filter initial covariance: extracted to constant
+  - QUEUE_MAX_ENTRIES (2000) queue capacity: centralized in constants.h
+  - HTTP_SERVER_PORT (80) now used consistently in api_server.h
+  - All constants documented with purpose and technical notes
 - [ ] **Phase 3: iOS Service Refactoring** — 4 services to reduce responsibilities
 - [ ] **Phase 4: iOS View Splitting** — 8 large views to break into focused components
 
