@@ -1,46 +1,54 @@
 import Foundation
 import SwiftData
 
-// DataCache — Persistent Storage for Device Readings
-// ─────────────────────────────────────────────────────────────
-// Uses SwiftData (iOS 17+) with on-device SQLite to persist
-// water level readings and historical data across app launches.
-//
-// Persistence Strategy:
-// • DeviceReading model: timestamp, nodeID, levelPct, distanceCM, sensorOk, isTest
-// • Storage: Device-local SQLite database (not synced to iCloud)
-// • Retention: Readings kept for 30 days; older entries auto-deleted
-// • Deduplication: Avoids duplicates when importing queued readings from device
-// • Test Mode: Marks readings with isTest flag; filtered in history by default
-//
-// Data Sources:
-// 1. Live readings: saved immediately from BLE/WiFi in real-time
-// 2. Device queue: bulk imported via /api/queue/flush on WiFi connection
-//
-// Usage:
-//   dataCache.save(status)  // Save a live reading
-//   dataCache.readings(since: date, nodeID: "sensor-a")  // Fetch history
-//
-// Thread Safety:
-// Call from main thread only; SwiftData ModelContext is not thread-safe.
-// ConnectionManager handles all data cache calls on main via MainActor.
-
+/**
+ * DataCache — Persistent Storage for Device Readings
+ *
+ * Persists water level readings to on-device SQLite via SwiftData.
+ * Supports multiple data sources (live stream, device queue) and
+ * provides flexible querying for historical analysis.
+ *
+ * REFACTORING NOTE: Phase 3d extracted QueueImporter and DataPruner.
+ * DataCache now focuses on live reading persistence and history queries.
+ *
+ * Persistence Strategy:
+ * • Live readings: Saved immediately from BLE/WiFi (via save())
+ * • Queue readings: Bulk imported with timestamp reconstruction (via QueueImporter)
+ * • Maintenance: Old entries auto-pruned by DataPruner (configurable retention)
+ * • Deduplication: QueueImporter prevents double-counting
+ * • Test Mode: Marks readings with isTest flag; filtered in history
+ *
+ * Usage:
+ *   dataCache.save(status)  // Save live reading
+ *   dataCache.readings(since: date, nodeID: "sensor-a")  // Query history
+ *
+ * Thread Safety: Call from main thread only (SwiftData requirement).
+ */
 final class DataCache {
     private let context: ModelContext
-    var currentNodeID: String = ""  // set by ConnectionManager when device connects
-    var testModeEnabled: Bool = false  // set by ConnectionManager when device config received
+    private let queueImporter: QueueImporter
+    private let dataPruner: DataPruner
+
+    var currentNodeID: String = ""      // Device ID (set by ConnectionManager)
+    var testModeEnabled: Bool = false   // Test mode flag (set by ConnectionManager)
 
     init(context: ModelContext) {
         self.context = context
+        self.queueImporter = QueueImporter(modelContext: context)
+        self.dataPruner = DataPruner(modelContext: context)
     }
 
-    // save(_:)
-    // ────────────────────────────────────────────────────────
-    // Persists a live reading from the device to the local SQLite store.
-    // Only saves readings with sensorOk=true to avoid noise from initialization
-    // or sensor errors. Auto-prunes old entries after each save.
+    /**
+     * Save a live sensor reading to persistent storage.
+     * Only persists valid readings (sensorOk=true) to reduce noise.
+     * Automatically prunes old entries to maintain storage bounds.
+     *
+     * Parameters:
+     *   status - DeviceStatus from live BLE/WiFi stream
+     */
     func save(_ status: DeviceStatus) {
         guard status.sensorOk else { return }
+
         let reading = DeviceReading(
             timestamp: Date(),
             nodeID: currentNodeID,
@@ -55,60 +63,45 @@ final class DataCache {
         } catch {
             print("[DataCache] Failed to save reading: \(error.localizedDescription)")
         }
-        pruneOldEntries()
+        dataPruner.pruneOldEntries()
     }
 
-    // saveQueueEntries(_:bootTime:)
-    // ────────────────────────────────────────────────────────
-    // Imports a batch of readings from the device's on-board queue
-    // (fetched via /api/queue/flush). Reconstructs absolute timestamps
-    // using deviceBootTime since queued readings are stored as seconds
-    // since device boot. Deduplicates to prevent duplicate imports if
-    // queue flush is called multiple times.
+    /**
+     * Import batch of readings from device queue.
+     * Reconstructs timestamps and deduplicates with live readings.
+     * Delegates to QueueImporter for implementation.
+     *
+     * Parameters:
+     *   entries  - Array from /api/queue/flush endpoint
+     *   bootTime - Device boot timestamp (for reconstructing absolute times)
+     */
     func saveQueueEntries(_ entries: [[String: Any]], bootTime: Date) {
-        var imported = 0
-        for entry in entries {
-            guard let sensorOk = entry["sensor_ok"] as? Int, sensorOk == 1,
-                  let ts         = entry["ts"]          as? Int,
-                  let levelPct   = entry["level_pct"]   as? Int,
-                  let distanceCM = entry["distance_cm"] as? Double else { continue }
-
-            let timestamp = bootTime.addingTimeInterval(TimeInterval(ts))
-            guard !hasDuplicate(near: timestamp) else { continue }
-
-            context.insert(DeviceReading(
-                timestamp: timestamp,
-                nodeID: currentNodeID,
-                levelPct: levelPct,
-                distanceCM: distanceCM,
-                sensorOk: true,
-                isTest: testModeEnabled
-            ))
-            imported += 1
-        }
-        do {
-            try context.save()
-            if imported > 0 {
-                print("[DataCache] Imported \(imported) queued readings")
-            }
-        } catch {
-            print("[DataCache] Failed to save queue entries: \(error.localizedDescription)")
-        }
-        pruneOldEntries()
+        queueImporter.importQueueEntries(
+            entries,
+            bootTime: bootTime,
+            nodeID: currentNodeID,
+            testMode: testModeEnabled
+        )
+        dataPruner.pruneOldEntries()
     }
 
-    // readings(since:nodeID:includeTest:)
-    // ────────────────────────────────────────────────────────
-    // Fetches historical readings with flexible filtering:
-    // • since: returns readings after this date
-    // • nodeID: filters to a specific device (nil = all devices)
-    // • includeTest: excludes test readings by default (false)
-    //
-    // Used by HistoryView for charts and graphs. Returns up to 2000 results.
+    /**
+     * Fetch historical readings with flexible filtering.
+     * Used by HistoryView for charts and trend analysis.
+     *
+     * Parameters:
+     *   date        - Return readings after this date
+     *   nodeID      - Filter to specific device (nil = all devices)
+     *   includeTest - Include test readings (default: false)
+     *
+     * Returns: Array of DeviceReading (up to 2000 results)
+     */
     func readings(since date: Date, nodeID: String? = nil, includeTest: Bool = false) -> [DeviceReading] {
         let predicate = #Predicate<DeviceReading> { $0.timestamp >= date }
-        var desc = FetchDescriptor<DeviceReading>(predicate: predicate,
-                                                   sortBy: [SortDescriptor(\.timestamp)])
+        var desc = FetchDescriptor<DeviceReading>(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\.timestamp)]
+        )
         desc.fetchLimit = 2000
         let all = (try? context.fetch(desc)) ?? []
 
@@ -120,35 +113,6 @@ final class DataCache {
             }
             let matchesTestMode = includeTest || !r.isTest
             return matchesNode && matchesTestMode
-        }
-    }
-
-    // hasDuplicate(near:)
-    // ────────────────────────────────────────────────────────
-    // Checks if a reading already exists within ±1 second of the given timestamp.
-    // Used to deduplicate when importing from device queue to avoid double-counting
-    // readings that were already saved from live stream.
-    private func hasDuplicate(near timestamp: Date) -> Bool {
-        let lo = timestamp.addingTimeInterval(-1.0)
-        let hi = timestamp.addingTimeInterval(1.0)
-        let pred = #Predicate<DeviceReading> { $0.timestamp >= lo && $0.timestamp <= hi }
-        var desc = FetchDescriptor<DeviceReading>(predicate: pred)
-        desc.fetchLimit = 1
-        return (try? context.fetch(desc))?.isEmpty == false
-    }
-
-    // pruneOldEntries()
-    // ────────────────────────────────────────────────────────
-    // Removes readings older than 30 days to limit database size.
-    // Called after each save to keep storage bounded. On typical water
-    // level sensors (poll every 10-30 seconds), 30 days = ~30MB of data.
-    private func pruneOldEntries() {
-        let cutoff = Date().addingTimeInterval(-30 * 24 * 3600)
-        do {
-            try context.delete(model: DeviceReading.self,
-                              where: #Predicate { $0.timestamp < cutoff })
-        } catch {
-            print("[DataCache] Failed to prune old entries: \(error.localizedDescription)")
         }
     }
 }
