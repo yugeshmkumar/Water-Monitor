@@ -17,7 +17,13 @@
 #define MDNS_TIMEOUT_MS 50
 #define SEMAPHORE_TIMEOUT_MS 50
 
-#define QUEUE_FLUSH_MAX_ENTRIES 50
+// ────────────────────────────────────────────────────────────
+// Queue Configuration
+// ────────────────────────────────────────────────────────────
+
+#define QUEUE_MAX_ENTRIES 2000         // Circular buffer capacity (32KB for 16-byte entries)
+#define QUEUE_ENTRY_SIZE_BYTES 16      // Fixed size: seq(4) + ts(4) + distance(4) + pct(1) + ok(1) + sent(1) + pad(1)
+#define QUEUE_FLUSH_MAX_ENTRIES 50     // Max entries per API flush call
 #define REBOOT_DELAY_MS 500
 
 // ────────────────────────────────────────────────────────────
@@ -149,6 +155,7 @@
 
 #define KF_Q 4.0f
 #define KF_R 25.0f
+#define KF_INITIAL_P 1000.0f           // Initial covariance before first measurement
 #define KF_OUTLIER_SIGMA 3.0f
 #define KF_MAX_REJECT_STREAK 6
 
