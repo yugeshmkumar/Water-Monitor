@@ -165,7 +165,7 @@ void ApiServer::_setupRest() {
         doc["hostname"] = String(config.d.node_id) + ".local";
         String body;
         serializeJson(doc, body);
-        req->send(200, "application/json", body);
+        req->send(HTTP_STATUS_OK, "application/json", body);
     });
 
     // POST /api/config — partial update
@@ -186,7 +186,7 @@ void ApiServer::_setupRest() {
         queueStore.getUnsent(arr, QUEUE_FLUSH_MAX_ENTRIES);
         String out;
         serializeJson(doc, out);
-        req->send(200, "application/json", out);
+        req->send(HTTP_STATUS_OK, "application/json", out);
     });
 
     // POST /api/queue/ack — {"seq_up_to": 1042}
@@ -200,7 +200,7 @@ void ApiServer::_setupRest() {
                 return;
             }
             queueStore.setPendingAck(seq);
-            req->send(200, "application/json", "{\"ok\":true}");
+            req->send(HTTP_STATUS_OK, "application/json", "{\"ok\":true}");
         }));
 
     // POST /api/command — same payload as BLE AA05
@@ -213,7 +213,7 @@ void ApiServer::_setupRest() {
 
             // Deferred reboot: send response first
             bool isReboot = (strcmp(json["cmd"] | "", "reboot") == 0);
-            req->send(200, "application/json", resultBuf);
+            req->send(HTTP_STATUS_OK, "application/json", resultBuf);
             if (isReboot) {
                 delay(REBOOT_DELAY_MS);
                 ESP.restart();
