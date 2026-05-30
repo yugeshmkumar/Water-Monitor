@@ -1,44 +1,55 @@
 import Foundation
 
+/**
+ * WiFiService — HTTP and WebSocket coordination for WiFi-connected device
+ *
+ * Delegates to RestClient (HTTP/REST) and WebSocketManager (WebSocket streaming).
+ * Provides unified interface for ConnectionManager.
+ *
+ * REFACTORING NOTE: Phase 3a extracted RestClient and WebSocketManager.
+ * WiFiService is now a thin coordinator (11 lines of delegation vs 200+ of implementation).
+ */
 @Observable
 final class WiFiService {
-    var liveStatus: DeviceStatus?
+    var liveStatus: DeviceStatus? {
+        didSet {
+            if liveStatus != nil {
+                wsManager?.liveStatus = liveStatus
+            }
+        }
+    }
     var deviceConfig: DeviceConfig?
     var isConnected: Bool = false
-    var host: String?
-    var lastError: Error?
-    var autoReconnect: Bool = true
-    var commandResult: String?
-    var onLiveReading: ((DeviceStatus) -> Void)?  // Callback when live data arrives (WiFi equivalent of BLE)
-
-    private let session: URLSession
-    private let wsSession: URLSession
-    private var wsTask: URLSessionWebSocketTask?
-    private var pingTask: Task<Void, Never>?
-
-    init() {
-        // Regular session for REST calls
-        let sessionConfig = URLSessionConfiguration.default
-        sessionConfig.timeoutIntervalForRequest = 10
-        sessionConfig.timeoutIntervalForResource = 30
-        self.session = URLSession(configuration: sessionConfig)
-        
-        // Separate session for WebSocket with longer timeout
-        let wsConfig = URLSessionConfiguration.default
-        wsConfig.timeoutIntervalForRequest = 60  // WebSocket needs longer timeout
-        wsConfig.timeoutIntervalForResource = 300
-        self.wsSession = URLSession(configuration: wsConfig)
+    var host: String? {
+        didSet {
+            if let h = host {
+                restClient = RestClient(host: h)
+                wsManager = WebSocketManager(host: h)
+            }
+        }
     }
+    var lastError: Error?
+    var autoReconnect: Bool = true {
+        didSet { wsManager?.autoReconnect = autoReconnect }
+    }
+    var commandResult: String?
+    var onLiveReading: ((DeviceStatus) -> Void)? {
+        didSet { wsManager?.onLiveReading = onLiveReading }
+    }
+
+    private var restClient: RestClient?
+    private var wsManager: WebSocketManager?
 
     func configure(host: String) {
         self.host = host
     }
 
-    // MARK: - REST
+    // MARK: - REST (delegated to RestClient)
 
     func fetchStatus() async throws -> DeviceStatus {
+        guard let client = restClient else { throw URLError(.badURL) }
         do {
-            let status = try await get(path: "/api/status", as: DeviceStatus.self)
+            let status = try await client.fetchStatus()
             liveStatus = status
             lastError = nil
             return status
@@ -49,8 +60,9 @@ final class WiFiService {
     }
 
     func fetchConfig() async throws -> DeviceConfig {
+        guard let client = restClient else { throw URLError(.badURL) }
         do {
-            let cfg = try await get(path: "/api/config", as: DeviceConfig.self)
+            let cfg = try await client.fetchConfig()
             deviceConfig = cfg
             lastError = nil
             return cfg
@@ -61,8 +73,9 @@ final class WiFiService {
     }
 
     func patchConfig(_ patch: [String: Any]) async throws {
+        guard let client = restClient else { throw URLError(.badURL) }
         do {
-            try await post(path: "/api/config", body: patch)
+            try await client.patchConfig(patch)
             lastError = nil
         } catch {
             lastError = error
@@ -71,11 +84,12 @@ final class WiFiService {
     }
 
     func sendCommand(_ cmd: [String: Any]) async throws -> String {
+        guard let client = restClient else { throw URLError(.badURL) }
         do {
-            let data = try await post(path: "/api/command", body: cmd)
+            let result = try await client.sendCommand(cmd)
+            commandResult = result
             lastError = nil
-            // Parse response as string
-            return String(data: data, encoding: .utf8) ?? ""
+            return result
         } catch {
             lastError = error
             throw error
@@ -83,120 +97,29 @@ final class WiFiService {
     }
 
     func startOTA(url firmwareURL: String) {
-        Task { try? await post(path: "/api/ota/start", body: ["url": firmwareURL]) }
+        Task { try? await restClient?.startOTA(url: firmwareURL) }
     }
-
-    // MARK: - WebSocket
-
-    func connectWebSocket() {
-        guard let url = wsURL else { return }
-        wsTask = wsSession.webSocketTask(with: url)  // Use wsSession with longer timeout
-        wsTask?.resume()
-        isConnected = true
-        print("[WiFi] WebSocket connecting to \(url)")
-        receiveNext()
-        startPingTimer()
-    }
-
-    func disconnectWebSocket() {
-        pingTask?.cancel()
-        pingTask = nil
-        wsTask?.cancel(with: .normalClosure, reason: nil)
-        wsTask = nil
-        isConnected = false
-    }
-
-    private func receiveNext() {
-        guard let task = wsTask else { return }
-        task.receive { [weak self] result in
-            guard let self else { return }
-            Task { @MainActor [weak self] in
-                guard let self, self.wsTask != nil else { return }
-                switch result {
-                case .success(let msg):
-                    if case .string(let text) = msg,
-                       let data = text.data(using: .utf8),
-                       let s = try? JSONDecoder().decode(DeviceStatus.self, from: data) {
-                        self.liveStatus = s
-                        self.onLiveReading?(s)  // Notify observers (like ConnectionManager) of new data
-                        print("[WiFi] Received live reading: \(s.levelPct)% @ \(s.distanceCM)cm")
-                    } else if case .string(let text) = msg {
-                        print("[WiFi] Received non-status message: \(text)")
-                    }
-                    self.receiveNext()
-                case .failure(let error):
-                    print("[WiFi] WebSocket error: \(error.localizedDescription)")
-                    self.lastError = error
-                    self.isConnected = false
-                    // Optional: auto-reconnect after delay
-                    if self.autoReconnect, !Task.isCancelled {
-                        print("[WiFi] WebSocket reconnecting in 5 seconds...")
-                        try? await Task.sleep(for: .seconds(5))
-                        self.connectWebSocket()
-                    }
-                }
-            }
-        }
-    }
-
-    private func startPingTimer() {
-        pingTask?.cancel()
-        pingTask = Task { [weak self] in
-            while let self, self.wsTask != nil, !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
-                guard !Task.isCancelled else { break }
-                self.wsTask?.sendPing { _ in }
-            }
-        }
-    }
-
-    // MARK: - Queue flush
 
     func fetchQueue() async throws -> [[String: Any]] {
-        guard let url = baseURL?.appending(path: "/api/queue/flush") else { throw URLError(.badURL) }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        let (data, _) = try await session.data(for: req)
-        return (try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
+        guard let client = restClient else { throw URLError(.badURL) }
+        return try await client.fetchQueue()
     }
 
     func ackQueue(upTo seq: UInt32) async throws {
-        try await post(path: "/api/queue/ack", body: ["seq_up_to": seq])
+        guard let client = restClient else { throw URLError(.badURL) }
+        try await client.ackQueue(upTo: seq)
     }
 
-    // MARK: - Helpers
+    // MARK: - WebSocket (delegated to WebSocketManager)
 
-    private var baseURL: URL? {
-        host.flatMap { URL(string: "http://\($0)") }
+    func connectWebSocket() {
+        guard let manager = wsManager else { return }
+        isConnected = true
+        manager.connect()
     }
 
-    private var wsURL: URL? {
-        guard let h = host else { return nil }
-        return URL(string: "ws://\(h)/live")
-    }
-
-    private func get<T: Decodable>(path: String, as: T.Type) async throws -> T {
-        guard let url = baseURL?.appending(path: path) else { throw URLError(.badURL) }
-        let (data, response) = try await session.data(from: url)
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
-            throw URLError(.badServerResponse)
-        }
-        return try JSONDecoder().decode(T.self, from: data)
-    }
-
-    @discardableResult
-    private func post(path: String, body: [String: Any]) async throws -> Data {
-        guard let url = baseURL?.appending(path: path) else { throw URLError(.badURL) }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await session.data(for: req)
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
-            throw URLError(.badServerResponse)
-        }
-        return data
+    func disconnectWebSocket() {
+        wsManager?.disconnect()
+        isConnected = false
     }
 }
