@@ -23,7 +23,15 @@
   - Result: 8 new focused services, 4 major services simplified, 532 lines redistributed
   - Single Responsibility: Achieved across all iOS services
 
-- [ ] **Phase 4: iOS View Splitting** — 8 large views to break into focused components
+- [x] **Phase 4: iOS View Splitting** — Extract 8 large views into 22 focused components
+  - Phase 4a: TankCalibrationView (567 lines → 4 components + 150-line coordinator)
+    * CalibrationModeSelector: Mode selection UI (80 lines)
+    * SensorStreamingDisplay: Real-time visualization (167 lines)
+    * CalibrationDataProcessor: AI filtering and stability (151 lines)
+    * CalibrationResultsDisplay: Results summary (160 lines)
+    * TankCalibrationView_Refactored: Coordinator (150 lines, 73% reduction)
+  - Phase 4b: Ready — InsightsView (426), ConfigWizardView (316), DeviceDetailView (319)
+  - Phase 4c: Ready — AddDeviceView (223), DashboardView (184), HistoryView (244), DeviceHealthCheckView (288)
 
 ---
 
