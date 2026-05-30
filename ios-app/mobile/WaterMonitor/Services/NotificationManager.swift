@@ -25,6 +25,13 @@ final class NotificationManager {
         }
     }
 
+    /// Check water level and send notification if needed
+    /// - Parameters:
+    ///   - deviceName: User-friendly display name (e.g., "Rooftop Tank Sensor")
+    ///   - nodeID: Unique device identifier for cooldown tracking (e.g., "sensor-a")
+    ///   - levelPct: Current water level percentage
+    ///   - alertLowPct: Low water alert threshold
+    ///   - alertHighPct: High water alert threshold
     func checkAndNotify(deviceName: String, nodeID: String, levelPct: Int, alertLowPct: Int, alertHighPct: Int) {
         guard notificationsEnabled else { return }
 
@@ -60,9 +67,17 @@ final class NotificationManager {
         content.title = title
         content.body = body
         content.sound = .default
-        content.badge = NSNumber(value: UIApplication.shared.applicationIconBadgeNumber + 1)
-
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false))
+        
+        // Badge handling - simply set to 1 for each notification
+        // (Alternative: track count internally if needed)
+        content.badge = 1
+        
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        )
+        
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
                 print("[Notifications] Failed to send: \(error)")

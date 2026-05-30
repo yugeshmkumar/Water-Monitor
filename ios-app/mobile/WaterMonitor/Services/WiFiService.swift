@@ -27,6 +27,10 @@ final class WiFiService {
         let wsConfig = URLSessionConfiguration.default
         wsConfig.timeoutIntervalForRequest = 60  // WebSocket needs longer timeout
         wsConfig.timeoutIntervalForResource = 300
+        
+        // ✅ Disable proxy to allow direct local network connections
+        wsConfig.connectionProxyDictionary = [:]
+        
         self.wsSession = URLSession(configuration: wsConfig)
     }
 

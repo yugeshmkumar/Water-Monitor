@@ -113,19 +113,33 @@ struct AddDeviceView: View {
                     description: Text("Enable Bluetooth in Settings to find your sensor.")
                 )
             } else {
+                // Filter out devices that are already saved
+                let savedNodeIDs = Set(savedDevices.map { $0.nodeID })
+                
                 let relevantDevices = cm.ble.discovered.filter { peripheral in
                     guard let name = peripheral.name else { return false }
                     let lower = name.lowercased()
-                    return lower.starts(with: "sensor-") ||
-                           lower.starts(with: "motor-") ||
-                           lower.starts(with: "tank-")
+                    
+                    // Only show devices matching the naming pattern
+                    guard lower.starts(with: "sensor-") ||
+                          lower.starts(with: "motor-") ||
+                          lower.starts(with: "tank-") else {
+                        return false
+                    }
+                    
+                    // Exclude devices that are already added
+                    // The device name should match the nodeID pattern (e.g., "sensor-a")
+                    return !savedNodeIDs.contains(name)
                 }
 
                 if relevantDevices.isEmpty {
+                    let hasSavedDevices = !savedDevices.isEmpty
                     ContentUnavailableView(
-                        "No Sensors Found",
+                        "No New Sensors Found",
                         systemImage: "antenna.radiowaves.left.and.right",
-                        description: Text("Make sure your Water Monitor sensor is powered on and nearby.")
+                        description: Text(hasSavedDevices 
+                            ? "All nearby sensors are already added. Make sure new sensors are powered on and nearby."
+                            : "Make sure your Water Monitor sensor is powered on and nearby.")
                     )
                 } else {
                     List(relevantDevices, id: \.identifier) { peripheral in

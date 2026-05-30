@@ -7,19 +7,21 @@ struct DeviceCardView: View {
     let device: SavedDevice
     let searchTimeout: Bool
 
-    private var isActive: Bool {
-        cm.config?.nodeID == device.nodeID
+    // ✅ Check if THIS specific device is connected
+    private var isConnected: Bool {
+        cm.isConnected(nodeID: device.nodeID)
+    }
+    
+    // ✅ Get THIS device's status
+    private var deviceStatus: DeviceStatus? {
+        cm.getStatus(for: device.nodeID)
     }
 
     private var connectionState: ConnectionState {
-        guard isActive else {
-            return searchTimeout ? .offline : .searching
+        if isConnected {
+            return .wifi  // All multi-connections are WiFi
         }
-        if cm.isOnline {
-            if cm.transport == .wifi { return .wifi }
-            if cm.transport == .ble { return .ble }
-        }
-        return .offline
+        return searchTimeout ? .offline : .searching
     }
 
     var body: some View {
@@ -58,11 +60,11 @@ struct DeviceCardView: View {
             Circle()
                 .stroke(.quaternary, lineWidth: 5)
             Circle()
-                .trim(from: 0, to: isActive ? Double(cm.displayStatus?.levelPct ?? 0) / 100.0 : 0)
+                .trim(from: 0, to: isConnected ? Double(deviceStatus?.levelPct ?? 0) / 100.0 : 0)
                 .stroke(gaugeColor, style: StrokeStyle(lineWidth: 5, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .animation(.easeInOut(duration: 0.5), value: cm.displayStatus?.levelPct)
-            Text(isActive && cm.displayStatus != nil ? "\(cm.displayStatus!.levelPct)%" : "--")
+                .animation(.easeInOut(duration: 0.5), value: deviceStatus?.levelPct)
+            Text(isConnected && deviceStatus != nil ? "\(deviceStatus!.levelPct)%" : "--")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .minimumScaleFactor(0.6)
         }
@@ -77,7 +79,7 @@ struct DeviceCardView: View {
 
             connectionBadge
 
-            if isActive, let status = cm.displayStatus, status.distanceCM > 0 {
+            if isConnected, let status = deviceStatus, status.distanceCM > 0 {
                 Text(String(format: "%.1f cm from sensor", status.distanceCM))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -116,7 +118,9 @@ struct DeviceCardView: View {
     }
 
     private var gaugeColor: Color {
-        guard isActive, let config = cm.config, let status = cm.displayStatus else { return .blue }
+        guard isConnected, 
+              let config = cm.getConfig(for: device.nodeID),
+              let status = deviceStatus else { return .blue }
         if status.levelPct <= config.alertLowPct { return .red }
         if status.levelPct >= config.alertHighPct { return .orange }
         return .blue

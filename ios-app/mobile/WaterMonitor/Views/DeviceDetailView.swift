@@ -11,10 +11,23 @@ struct DeviceDetailView: View {
     @State private var showCalibration = false
     @State private var showHealthCheck = false
 
-    private var isActive: Bool { cm.config?.nodeID == device.nodeID }
+    // ✅ Check if THIS specific device is connected
+    private var isConnected: Bool {
+        cm.isConnected(nodeID: device.nodeID)
+    }
+    
+    // ✅ Get THIS device's status
+    private var deviceStatus: DeviceStatus? {
+        cm.getStatus(for: device.nodeID)
+    }
+    
+    // ✅ Get THIS device's config
+    private var deviceConfig: DeviceConfig? {
+        cm.getConfig(for: device.nodeID)
+    }
 
     private var gaugeColor: Color {
-        guard let config = cm.config, let status = cm.displayStatus else { return .blue }
+        guard let config = deviceConfig, let status = deviceStatus else { return .blue }
         if status.levelPct <= config.alertLowPct { return .red }
         if status.levelPct >= config.alertHighPct { return .orange }
         return .blue
@@ -44,7 +57,7 @@ struct DeviceDetailView: View {
             }
         }
         .overlay {
-            if !isActive {
+            if !isConnected {
                 connectingOverlay
             }
         }
@@ -93,12 +106,12 @@ struct DeviceDetailView: View {
                 Circle()
                     .stroke(.quaternary, lineWidth: 16)
                 Circle()
-                    .trim(from: 0, to: Double(cm.displayStatus?.levelPct ?? 0) / 100.0)
+                    .trim(from: 0, to: Double(deviceStatus?.levelPct ?? 0) / 100.0)
                     .stroke(gaugeColor, style: StrokeStyle(lineWidth: 16, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                    .animation(.easeInOut(duration: 0.4), value: cm.displayStatus?.levelPct)
+                    .animation(.easeInOut(duration: 0.4), value: deviceStatus?.levelPct)
                 VStack(spacing: 0) {
-                    Text("\(cm.displayStatus?.levelPct ?? 0)")
+                    Text("\(deviceStatus?.levelPct ?? 0)")
                         .font(.system(size: 56, weight: .bold, design: .rounded))
                     Text("%")
                         .font(.title3)
@@ -107,7 +120,7 @@ struct DeviceDetailView: View {
             }
             .frame(width: 220, height: 220)
 
-            if let status = cm.status {
+            if let status = deviceStatus {
                 if !status.sensorOk {
                     Label("No sensor signal — showing last valid reading",
                           systemImage: "exclamationmark.triangle.fill")
@@ -121,7 +134,7 @@ struct DeviceDetailView: View {
                 }
             }
 
-            if let config = cm.config, let status = cm.displayStatus {
+            if let config = deviceConfig, let status = deviceStatus {
                 if status.levelPct <= config.alertLowPct {
                     Label("Low water level", systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline)
@@ -138,15 +151,15 @@ struct DeviceDetailView: View {
     private var statsGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
             statCard("RSSI",
-                     value: cm.status.map { "\($0.rssi) dBm" } ?? "--")
+                     value: deviceStatus.map { "\($0.rssi) dBm" } ?? "--")
             statCard("Sensor",
-                     value: cm.status.map { $0.sensorOk ? "OK" : "No signal" } ?? "--",
-                     warning: cm.status.map { !$0.sensorOk } ?? false)
+                     value: deviceStatus.map { $0.sensorOk ? "OK" : "No signal" } ?? "--",
+                     warning: deviceStatus.map { !$0.sensorOk } ?? false)
             statCard("Queue",
-                     value: cm.status.map { "\($0.queueDepth)" } ?? "--",
-                     warning: (cm.status?.queueDepth ?? 0) > 10)
+                     value: deviceStatus.map { "\($0.queueDepth)" } ?? "--",
+                     warning: (deviceStatus?.queueDepth ?? 0) > 10)
             statCard("Firmware",
-                     value: cm.status?.firmwareVersion ?? "--")
+                     value: deviceStatus?.firmwareVersion ?? "--")
         }
     }
 
@@ -172,7 +185,7 @@ struct DeviceDetailView: View {
                             }
                         }
                     ))
-                    .disabled(testModeLoading || !isActive)
+                    .disabled(testModeLoading || !isConnected)  // ✅ Use isConnected
 
                     if testModeLoading {
                         ProgressView()
@@ -181,7 +194,7 @@ struct DeviceDetailView: View {
                 }
                 .font(.subheadline)
 
-                if cm.testMode, let testInterval = cm.config?.testPollIntervalS {
+                if cm.testMode, let testInterval = deviceConfig?.testPollIntervalS {  // ✅ Use deviceConfig
                     HStack(spacing: 12) {
                         Text("Test Interval")
                             .font(.caption)
@@ -213,14 +226,14 @@ struct DeviceDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .disabled(!isActive)
+                .disabled(!isConnected)  // ✅ Use isConnected
 
                 Button(action: { showHealthCheck = true }) {
                     Label("Health Check", systemImage: "checkmark.circle")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .disabled(!isActive)
+                .disabled(!isConnected)  // ✅ Use isConnected
             }
 
             NavigationLink(destination: HistoryView()) {
@@ -237,7 +250,7 @@ struct DeviceDetailView: View {
                 .font(.headline)
 
             VStack(spacing: 0) {
-                if let config = cm.config {
+                if let config = deviceConfig {  // ✅ Use deviceConfig
                     infoRow("IP Address", config.ip.isEmpty ? "--" : config.ip)
                     Divider().padding(.leading)
                     infoRow("MAC", config.mac.isEmpty ? "--" : config.mac)
@@ -301,19 +314,12 @@ struct DeviceDetailView: View {
     }
 
     private var transportColor: Color {
-        switch cm.transport {
-        case .wifi: return .green
-        case .ble: return .blue
-        case .none: return .gray
-        }
+        // ✅ Check if THIS device is connected
+        return isConnected ? .green : .gray
     }
 
     private var transportLabel: String {
-        guard isActive && cm.isOnline else { return "Offline" }
-        switch cm.transport {
-        case .wifi: return "WiFi"
-        case .ble: return "Bluetooth"
-        case .none: return "Offline"
-        }
+        // ✅ Check if THIS device is connected
+        return isConnected ? "WiFi" : "Offline"
     }
 }

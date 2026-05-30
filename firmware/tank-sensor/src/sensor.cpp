@@ -51,10 +51,14 @@ static float        csConfirmed   = -1.0f;  // last published stable value
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 static float takeOnePulse() {
-    digitalWrite(PIN_TRIG, LOW);  delayMicroseconds(4);
-    digitalWrite(PIN_TRIG, HIGH); delayMicroseconds(TRIG_PULSE_US);
-    digitalWrite(PIN_TRIG, LOW);
-    long dur = pulseIn(PIN_ECHO, HIGH, ECHO_TIMEOUT_US);
+    // Use configured pins instead of hardcoded defaults
+    uint8_t trigPin = resolvePin(String(config.d.pin_trig));
+    uint8_t echoPin = resolvePin(String(config.d.pin_echo));
+
+    digitalWrite(trigPin, LOW);  delayMicroseconds(4);
+    digitalWrite(trigPin, HIGH); delayMicroseconds(TRIG_PULSE_US);
+    digitalWrite(trigPin, LOW);
+    long dur = pulseIn(echoPin, HIGH, ECHO_TIMEOUT_US);
     if (dur <= 0) return -1.0f;
     return (dur * SOUND_SPEED_CM_US) / 2.0f;
 }
@@ -283,9 +287,9 @@ void handlePinCommand(const char* json, char* resultBuf, size_t bufLen) {
     if (strcmp(cmd, "test_pin") == 0) {
         // Full sensor test: trigger + echo in one atomic operation
         if (strcmp(periph, "sensor") == 0) {
-            // Use hardcoded pins (same as normal polling)
-            const uint8_t trigPin = PIN_TRIG;
-            const uint8_t echoPin = PIN_ECHO;
+            // Use configured pins (same as normal polling)
+            const uint8_t trigPin = resolvePin(String(config.d.pin_trig));
+            const uint8_t echoPin = resolvePin(String(config.d.pin_echo));
 
             // Single attempt (no retries to avoid blocking)
             pinMode(trigPin, OUTPUT);

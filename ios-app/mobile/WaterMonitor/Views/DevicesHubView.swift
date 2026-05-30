@@ -33,7 +33,7 @@ struct DevicesHubView: View {
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("My Devices")
+            .navigationTitle("My Devices (\(cm.connectedDevices.count)/\(savedDevices.count))")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button { showAddDevice = true } label: {
@@ -55,9 +55,10 @@ struct DevicesHubView: View {
 
     private func startSearch() {
         searchTimeout = false
+        // Connect to ALL devices concurrently - pass nodeID to enable multi-connection
         for device in savedDevices where device.type == .sensor {
             let host = (device.lastIP?.isEmpty == false) ? device.lastIP! : device.lastHost
-            cm.tryWiFi(host: host)
+            cm.tryWiFi(host: host, nodeID: device.nodeID)  // ✅ Now passes nodeID
         }
         cm.startBLEScan()
         startBLEAutoConnect()
@@ -71,12 +72,12 @@ struct DevicesHubView: View {
 
     private func startPeriodicRetry() {
         retryTask = Task {
-            while !cm.isOnline {
+            while cm.connectedDevices.count < savedDevices.count {  // ✅ Check all devices
                 try? await Task.sleep(for: .seconds(30))
                 guard !Task.isCancelled else { return }
                 for device in savedDevices where device.type == .sensor {
                     let host = (device.lastIP?.isEmpty == false) ? device.lastIP! : device.lastHost
-                    cm.tryWiFi(host: host)
+                    cm.tryWiFi(host: host, nodeID: device.nodeID)  // ✅ Pass nodeID
                 }
             }
         }

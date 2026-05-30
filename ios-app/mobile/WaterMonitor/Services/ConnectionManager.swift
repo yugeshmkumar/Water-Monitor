@@ -7,6 +7,15 @@ enum Transport {
 @Observable
 final class ConnectionManager {
     let ble = BLEService()
+    
+    // NEW: Store individual WiFi connections per device
+    private var wifiConnections: [String: WiFiService] = [:]  // nodeID -> WiFiService
+    
+    // ✅ Observable state tracking for SwiftUI
+    private(set) var deviceConnectionStates: [String: Bool] = [:]  // nodeID -> isConnected
+    private(set) var lastUpdateTrigger = Date()  // Force UI updates
+    
+    // Legacy single WiFi service for backwards compatibility
     let wifi = WiFiService()
 
     var transport: Transport = .none
@@ -21,9 +30,50 @@ final class ConnectionManager {
     private var lastWiFiAttempt: [String: Date] = [:]  // Track recent WiFi attempts by host
     var onDeviceActivity: ((String) -> Void)?  // Called when device sends a reading (nodeID)
 
-    var status: DeviceStatus? { wifi.liveStatus ?? ble.liveStatus }
-    var config: DeviceConfig? { wifi.deviceConfig ?? ble.deviceConfig }
+    // Legacy properties - return first connected device for backwards compatibility
+    var status: DeviceStatus? { 
+        // Try to get from any connected WiFi device first
+        if let firstConnected = wifiConnections.values.first(where: { $0.isConnected }) {
+            return firstConnected.liveStatus
+        }
+        return wifi.liveStatus ?? ble.liveStatus
+    }
+    var config: DeviceConfig? {
+        if let firstConnected = wifiConnections.values.first(where: { $0.isConnected }) {
+            return firstConnected.deviceConfig
+        }
+        return wifi.deviceConfig ?? ble.deviceConfig
+    }
     var commandResult: String? { wifi.commandResult ?? ble.commandResult }
+    
+    // NEW: Get status for a specific device  
+    func getStatus(for nodeID: String) -> DeviceStatus? {
+        let status = wifiConnections[nodeID]?.liveStatus
+        // Trigger update to force UI refresh
+        _ = lastUpdateTrigger
+        return status
+    }
+    
+    // NEW: Get config for a specific device
+    func getConfig(for nodeID: String) -> DeviceConfig? {
+        let config = wifiConnections[nodeID]?.deviceConfig
+        _ = lastUpdateTrigger
+        return config
+    }
+    
+    // NEW: Check if a specific device is connected
+    func isConnected(nodeID: String) -> Bool {
+        // ✅ Use the synced state (which is observable)
+        let connected = deviceConnectionStates[nodeID] ?? false
+        // Trigger update to force UI refresh
+        _ = lastUpdateTrigger
+        return connected
+    }
+    
+    // NEW: Get all connected device node IDs
+    var connectedDevices: [String] {
+        wifiConnections.filter { $0.value.isConnected }.map { $0.key }
+    }
     
     // Last valid reading (when sensor was OK)
     private(set) var lastValidStatus: DeviceStatus?
@@ -68,6 +118,26 @@ final class ConnectionManager {
                 self?.onDeviceActivity?(nodeID)
             }
             print("[ConnectionManager] WiFi: saved reading \(status.levelPct)%")
+        }
+        
+        // ✅ Start periodic state sync to trigger UI updates
+        startPeriodicStateSync()
+    }
+    
+    // ✅ Periodically sync connection states to trigger SwiftUI updates
+    private func startPeriodicStateSync() {
+        Task { @MainActor in
+            while true {
+                // Update connection states from actual WiFiService states
+                for (nodeID, service) in wifiConnections {
+                    deviceConnectionStates[nodeID] = service.isConnected
+                }
+                // Trigger UI refresh
+                lastUpdateTrigger = Date()
+                
+                // Wait 1 second before next update
+                try? await Task.sleep(for: .seconds(1))
+            }
         }
     }
 
@@ -129,8 +199,8 @@ final class ConnectionManager {
         self.dataCache = dataCache
     }
 
-    // Try a specific host over WiFi (used by ContentView on launch for known saved devices)
-    func tryWiFi(host: String) {
+    // Try a specific host over WiFi - NOW SUPPORTS MULTIPLE CONCURRENT CONNECTIONS
+    func tryWiFi(host: String, nodeID: String? = nil) {
         // Skip invalid/placeholder IPs
         guard !host.isEmpty && host != "0.0.0.0" && !host.hasPrefix("0.0.0.0:") else {
             print("[ConnectionManager] Skipping WiFi \(host) - invalid IP")
@@ -146,40 +216,60 @@ final class ConnectionManager {
         }
         
         lastWiFiAttempt[host] = Date()
-        wifi.configure(host: host)
+        
         Task {
             print("[ConnectionManager] Trying WiFi: \(host)")
-            guard (try? await wifi.fetchStatus()) != nil else {
+            
+            // Create or get WiFi service for this connection
+            let wifiService: WiFiService
+            if let nodeID = nodeID, let existing = wifiConnections[nodeID] {
+                wifiService = existing
+            } else {
+                wifiService = WiFiService()
+            }
+            
+            wifiService.configure(host: host)
+            
+            // Test connection
+            guard (try? await wifiService.fetchStatus()) != nil else {
                 print("[ConnectionManager] WiFi failed: \(host)")
                 return
             }
+            
             print("[ConnectionManager] WiFi connected: \(host)")
             connectedWiFiHost = host
-            // Disconnect any existing WiFi connection to prevent duplicate clients
-            if transport == .wifi {
-                wifi.disconnectWebSocket()
+            
+            // Fetch config to get nodeID
+            guard let cfg = try? await wifiService.fetchConfig() else {
+                print("[ConnectionManager] Failed to fetch config from \(host)")
+                return
             }
-            // Stop BLE — ESP32 runs out of TCP sockets if BLE + WebSocket + flush all run at once
-            ble.stopScan()
-            ble.disconnect()
-            transport = .wifi
-            Task {
-                if let cfg = try? await wifi.fetchConfig() {
-                    self.dataCache?.currentNodeID = cfg.nodeID
-                    self.dataCache?.testModeEnabled = cfg.testingMode
-                    await MainActor.run {
-                        self.onUpdateDevice?(cfg.nodeID)
-                    }
+            
+            let deviceNodeID = nodeID ?? cfg.nodeID
+            
+            // Store this connection
+            wifiConnections[deviceNodeID] = wifiService
+            
+            // Set up callback for live readings
+            wifiService.onLiveReading = { [weak self] status in
+                self?.dataCache?.save(status)
+                self?.onDeviceActivity?(deviceNodeID)
+            }
+            
+            // Update data cache
+            self.dataCache?.currentNodeID = cfg.nodeID
+            self.dataCache?.testModeEnabled = cfg.testingMode
+            
+            await MainActor.run {
+                self.onUpdateDevice?(cfg.nodeID)
+                if transport == .none {
+                    transport = .wifi
                 }
             }
-            // Drain the on-device queue BEFORE opening WebSocket — ESP32 can only handle one
-            // persistent connection at a time alongside bulk HTTP requests
-            await drainQueue()
-            // Give ESP32 a moment to recover after queue flush
-            try? await Task.sleep(for: .seconds(2))
-            // Queue is empty — now open WebSocket for live streaming
-            print("[ConnectionManager] Opening WebSocket for live data...")
-            wifi.connectWebSocket()
+            
+            // Open WebSocket for live streaming
+            print("[ConnectionManager] Opening WebSocket for \(deviceNodeID)...")
+            wifiService.connectWebSocket()
         }
     }
 
@@ -260,6 +350,12 @@ final class ConnectionManager {
     }
 
     var isOnline: Bool {
+        // Check if ANY device is connected (multi-connection support)
+        if !wifiConnections.isEmpty && wifiConnections.values.contains(where: { $0.isConnected }) {
+            return true
+        }
+        
+        // Fall back to legacy check
         switch transport {
         case .wifi:
             return wifi.isConnected
@@ -271,6 +367,12 @@ final class ConnectionManager {
     }
 
     var isConnected: Bool {
+        // Check if ANY device is connected
+        if !wifiConnections.isEmpty && wifiConnections.values.contains(where: { $0.isConnected }) {
+            return true
+        }
+        
+        // Fall back to legacy check
         switch transport {
         case .wifi: return wifi.isConnected
         case .ble: return ble.bleState == .connected

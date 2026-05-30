@@ -1,8 +1,11 @@
 import SwiftUI
+import SwiftUI
+import SwiftData
 
 struct DashboardView: View {
     @Environment(ConnectionManager.self) private var cm
     @Environment(NotificationManager.self) private var notificationManager
+    @Environment(\.modelContext) private var modelContext
     @State private var vm: DashboardVM?
 
     var body: some View {
@@ -31,8 +34,11 @@ struct DashboardView: View {
         .onChange(of: cm.status?.levelPct) { _, levelPct in
             // Check tank level and send notifications if needed
             if let levelPct = levelPct, let config = cm.config, !config.nodeID.isEmpty {
+                // Get the user-friendly display name for the device
+                let displayName = getDeviceDisplayName(nodeID: config.nodeID)
+                
                 notificationManager.checkAndNotify(
-                    deviceName: config.nodeID,
+                    deviceName: displayName,
                     nodeID: config.nodeID,
                     levelPct: levelPct,
                     alertLowPct: config.alertLowPct,
@@ -180,5 +186,17 @@ struct DashboardView: View {
         case .ble:  return "Bluetooth"
         case .none: return "Offline"
         }
+    }
+    
+    private func getDeviceDisplayName(nodeID: String) -> String {
+        let descriptor = FetchDescriptor<SavedDevice>(
+            predicate: #Predicate { $0.nodeID == nodeID }
+        )
+        
+        guard let device = try? modelContext.fetch(descriptor).first else {
+            return nodeID  // Fallback to nodeID if device not found
+        }
+        
+        return device.displayName
     }
 }
