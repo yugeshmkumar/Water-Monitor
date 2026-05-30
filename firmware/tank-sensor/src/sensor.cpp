@@ -55,6 +55,17 @@ static float takeOnePulse() {
     uint8_t trigPin = resolvePin(String(config.d.pin_trig));
     uint8_t echoPin = resolvePin(String(config.d.pin_echo));
 
+    // Validate pin resolution — 255 means invalid pin name
+    if (trigPin == 255 || echoPin == 255) {
+        static unsigned long lastWarn = 0;
+        if (millis() - lastWarn > 10000) {
+            Serial.printf("[Sensor] ERROR: Invalid pin config (TRIG=%s→%d, ECHO=%s→%d)\n",
+                          config.d.pin_trig, trigPin, config.d.pin_echo, echoPin);
+            lastWarn = millis();
+        }
+        return -1.0f;
+    }
+
     digitalWrite(trigPin, LOW);  delayMicroseconds(4);
     digitalWrite(trigPin, HIGH); delayMicroseconds(TRIG_PULSE_US);
     digitalWrite(trigPin, LOW);
@@ -291,6 +302,12 @@ void handlePinCommand(const char* json, char* resultBuf, size_t bufLen) {
             const uint8_t trigPin = resolvePin(String(config.d.pin_trig));
             const uint8_t echoPin = resolvePin(String(config.d.pin_echo));
 
+            // Validate pin resolution
+            if (trigPin == 255 || echoPin == 255) {
+                snprintf(resultBuf, bufLen, "{\"result\":\"fail\",\"detail\":\"invalid_pin_config\"}");
+                return;
+            }
+
             // Single attempt (no retries to avoid blocking)
             pinMode(trigPin, OUTPUT);
             pinMode(echoPin, INPUT);
@@ -314,7 +331,7 @@ void handlePinCommand(const char* json, char* resultBuf, size_t bufLen) {
 
         // Legacy: individual pin tests (kept for compatibility)
         uint8_t gpio = resolvePin(String(pin));
-        if (gpio == 255) {
+        if (gpio == 255 || pin[0] == '\0') {
             snprintf(resultBuf, bufLen, "{\"result\":\"fail\",\"detail\":\"invalid_pin\"}");
             return;
         }
