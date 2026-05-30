@@ -24,14 +24,27 @@
   - Single Responsibility: Achieved across all iOS services
 
 - [x] **Phase 4: iOS View Splitting** — Extract 8 large views into 22 focused components
-  - Phase 4a: TankCalibrationView (567 lines → 4 components + 150-line coordinator)
+  - Phase 4a: TankCalibrationView (567 lines → 4 components + 150-line coordinator) ✅
     * CalibrationModeSelector: Mode selection UI (80 lines)
     * SensorStreamingDisplay: Real-time visualization (167 lines)
     * CalibrationDataProcessor: AI filtering and stability (151 lines)
     * CalibrationResultsDisplay: Results summary (160 lines)
     * TankCalibrationView_Refactored: Coordinator (150 lines, 73% reduction)
-  - Phase 4b: Ready — InsightsView (426), ConfigWizardView (316), DeviceDetailView (319)
-  - Phase 4c: Ready — AddDeviceView (223), DashboardView (184), HistoryView (244), DeviceHealthCheckView (288)
+  - Phase 4b.1: InsightsView (426 lines → 3 components + 80-line coordinator) ✅
+    * InsightsPredictionCard: Time-to-empty, drain rate (125 lines)
+    * InsightsChartSuite: Forecast, hourly, trends charts (160 lines)
+    * InsightsStatsPanel: Alerts, usage, fill events, pump estimates (180 lines)
+    * InsightsView_Refactored: Coordinator (80 lines, 82% reduction)
+  - Phase 4c.3: HistoryView (244 lines → 3 components + 70-line coordinator) ✅
+    * HistoryDevicePicker: Multi-device selection (50 lines)
+    * HistoryLevelChart: Time-series water level visualization (105 lines)
+    * HistoryStatsTable: Summary stats and recent readings (130 lines)
+    * HistoryView_Refactored: Coordinator (70 lines, 71% reduction)
+  - Phase 4b.2: ConfigWizardView (316 lines) — Ready
+  - Phase 4b.3: DeviceDetailView (319 lines) — Ready
+  - Phase 4c.1: AddDeviceView (223 lines) — Ready
+  - Phase 4c.2: DashboardView (184 lines) — Ready
+  - Phase 4c.4: DeviceHealthCheckView (288 lines) — Ready
 
 ---
 
