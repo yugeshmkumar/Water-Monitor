@@ -20,17 +20,24 @@ final class BLEService: NSObject {
     var bleState: BLEState = .off
     var discovered: [CBPeripheral] = []
     var connected: CBPeripheral?
-    var liveStatus: DeviceStatus?
+    var liveStatus: DeviceStatus? {
+        didSet { notificationHandler.updateLiveStatus(liveStatus ?? DeviceStatus()) }
+    }
     var deviceConfig: DeviceConfig?
     var commandResult: String?
     // Callbacks set by ConnectionManager
-    var onLiveReading: ((DeviceStatus) -> Void)?
-    var onConfigReceived: ((DeviceConfig) -> Void)?
+    var onLiveReading: ((DeviceStatus) -> Void)? {
+        didSet { notificationHandler.onLiveReading = onLiveReading }
+    }
+    var onConfigReceived: ((DeviceConfig) -> Void)? {
+        didSet { notificationHandler.onConfigReceived = onConfigReceived }
+    }
 
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var charMap: [CBUUID: CBCharacteristic] = [:]
     private var pendingScan = false
+    private let notificationHandler = BLENotificationHandler()  // Handle GATT notifications
 
     override init() {
         super.init()
@@ -103,61 +110,6 @@ final class BLEService: NSObject {
         }
     }
 
-    private func decode(_ char: CBCharacteristic) {
-        guard let data = char.value else { return }
-        let raw = String(data: data, encoding: .utf8) ?? "<binary \(data.count)B>"
-        switch char.uuid {
-        case GATT.levelRead:
-            // AA01 payload: {"level_pct":N,"distance_cm":N,"ts":N} — no sensor_ok field.
-            // The firmware only calls notifyLevel() when the reading is valid, so receiving
-            // AA01 is implicit proof sensor_ok=true. Never merge s.sensorOk (it would be
-            // the struct default of false, causing a flicker before the next AA02 arrives).
-            if let s = try? JSONDecoder().decode(DeviceStatus.self, from: data) {
-                var merged = liveStatus ?? DeviceStatus()
-                merged.levelPct   = s.levelPct
-                merged.distanceCM = s.distanceCM
-                merged.ts         = s.ts
-                merged.sensorOk   = true   // receipt of AA01 proves sensor is reading
-                liveStatus = merged
-                onLiveReading?(s)
-            }
-            print("[BLE] AA01 level:  \(raw)")
-        case GATT.statusRead:
-            // AA02 carries wifi_ok, sensor_ok, rssi, queue_depth — merge, don't overwrite level
-            if let s = try? JSONDecoder().decode(DeviceStatus.self, from: data) {
-                let prev = liveStatus
-                var merged = liveStatus ?? DeviceStatus()
-                merged.wifiOk     = s.wifiOk
-                merged.sensorOk   = s.sensorOk
-                merged.rssi       = s.rssi
-                merged.queueDepth = s.queueDepth
-                merged.localIP    = s.localIP
-                liveStatus = merged
-                // Only log when something meaningful changes
-                if prev == nil || s.queueDepth != prev?.queueDepth || s.sensorOk != prev?.sensorOk || s.localIP != prev?.localIP {
-                    print("[BLE] AA02 status: \(raw)")
-                }
-            }
-        case GATT.cfgRead:
-            print("[BLE] AA03 raw data: \(raw)")
-            do {
-                let cfg = try JSONDecoder().decode(DeviceConfig.self, from: data)
-                deviceConfig = cfg
-                var merged = liveStatus ?? DeviceStatus()
-                merged.firmwareVersion = cfg.firmwareVersion
-                liveStatus = merged
-                onConfigReceived?(cfg)
-                print("[BLE] AA03 config decoded: node=\(cfg.nodeID) empty=\(cfg.tankEmptyCM) full=\(cfg.tankFullCM)")
-            } catch {
-                print("[BLE] ❌ AA03 decode error: \(error)")
-            }
-        case GATT.cmdResult:
-            commandResult = raw
-            print("[BLE] AA06 result: \(raw)")
-        default:
-            print("[BLE] unknown char \(char.uuid): \(raw)")
-        }
-    }
 }
 
 extension BLEService: CBCentralManagerDelegate {
@@ -226,6 +178,10 @@ extension BLEService: CBPeripheralDelegate {
             print("[BLE] error reading \(characteristic.uuid.uuidString): \(error)")
             return
         }
-        decode(characteristic)
+        notificationHandler.handleNotification(characteristic)
+        // Sync notification handler state back to BLEService for Observable
+        liveStatus = notificationHandler.liveStatus
+        deviceConfig = notificationHandler.deviceConfig
+        commandResult = notificationHandler.commandResult
     }
 }
