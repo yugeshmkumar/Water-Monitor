@@ -89,5 +89,14 @@ private:
                     AwsEventType type, void* arg, uint8_t* data, size_t len);
 };
 
+/**
+ * CONNECTION & TIMEOUT LIMITS:
+ * • Max concurrent WebSocket clients: 10 (enforced by AsyncWebSocket)
+ * • WebSocket heartbeat/keepalive timeout: 30 seconds (no messages = disconnect)
+ * • HTTP request timeout: 30 seconds (AsyncWebServer default)
+ * • Stale connection cleanup: Runs every loop() call (~100ms)
+ * These limits prevent DoS and memory exhaustion from hung clients.
+ */
+
 // Global ApiServer instance used by all modules
 extern ApiServer apiServer;

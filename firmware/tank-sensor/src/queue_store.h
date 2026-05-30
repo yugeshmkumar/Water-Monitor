@@ -36,6 +36,16 @@
  * • processPending() must be called from commsTask (non-interrupt)
  * • setPendingAck() is async-safe; only sets volatile _pendingAck
  *
+ * FLASH WEAR CONSIDERATIONS:
+ * Each write() and processPending() performs a flash erase/write cycle.
+ * ESP32 flash is rated for ~100,000 cycles per block (1-2 year lifespan typical).
+ * Impact analysis:
+ *   • 1 reading/min = 1440 writes/day × 365 = 525,600 writes/year
+ *   • At 100K cycle limit per 32KB block: ~0.19 years = ~70 days
+ * Mitigation: Implement wear leveling across multiple files (future enhancement),
+ * or use RTC + cloud sync to reduce queue writes when online.
+ * Current design assumes WiFi connectivity ~1-2 hours/day, so write rate is low.
+ *
  * TYPICAL USAGE:
  *   // Firmware (sensorTask)
  *   queueStore.write(distance, level_pct);

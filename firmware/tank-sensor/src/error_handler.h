@@ -31,6 +31,17 @@
  * ERROR_MEMORY_INSUFFICIENT (7)- Heap allocation failed (OOM)
  *                                Recovery: Reduce polling rate, disable features
  *
+ * RECOVERY STRATEGIES:
+ * Each error has automatic and manual recovery steps:
+ *   • SENSOR_FAILURE (1): wifiTask retries every 30 seconds
+ *   • WIFI_CONNECT_FAILED (2): exponential backoff (1s, 2s, 4s, max 60s)
+ *   • API_CALL_FAILED (3): retry with WiFi reconnect
+ *   • BLE_FAILURE (4): restart BLE advertising after 5 seconds
+ *   • QUEUE_FULL (5): suspend sensor polling until queue flushed
+ *   • CONFIG_LOAD_FAILED (6): use factory defaults, user must reconfigure
+ *   • MEMORY_INSUFFICIENT (7): restart device (nuclear option)
+ * Mobile app displays recovery hints to user; error_count shown in dashboard.
+ *
  * USAGE:
  * ErrorHandler is a singleton (gErrorHandler) accessed from all tasks:
  *

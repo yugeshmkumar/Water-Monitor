@@ -44,6 +44,15 @@ struct SensorReading {
 };
 
 // DeviceState is the global state struct - all shared mutable state lives here
+// NOTE: When updating multiple related fields atomically, hold gStateMutex
+// for the entire update sequence, not individual field writes:
+//
+//   xSemaphoreTake(gStateMutex, ...);
+//   gDevice.distance_cm = dist;
+//   gDevice.level_pct = pct;
+//   gDevice.last_sensor_poll = now;
+//   xSemaphoreGive(gStateMutex);  // All 3 fields updated atomically
+//
 struct DeviceState {
     // --- WiFi Connectivity State ---
     char wifi_ssid[64];                 // Current WiFi SSID (from Config)

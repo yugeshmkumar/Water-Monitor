@@ -6,10 +6,12 @@
  * It is protected by gStateMutex (binary semaphore) to prevent data races.
  *
  * TASKS THAT ACCESS gState:
- * • sensorTask   - Updates last_read_ts, distance_cm, level_pct, sensor_ok
- * • wifiTask     - Updates wifi_rssi, wifi_ok
- * • commsTask    - Reads all fields for REST/BLE broadcasts
- * • bleTask      - Reads all fields for BLE advertising
+ * • sensorTask (Priority: HIGH, Core 1)     - Updates last_read_ts, distance_cm, level_pct, sensor_ok
+ * • wifiTask (Priority: MEDIUM, Core 1)     - Updates wifi_rssi, wifi_ok
+ * • commsTask (Priority: HIGH, Core 0)      - Reads all fields for REST/BLE broadcasts
+ * • bleTask (Priority: MEDIUM, Core 1)      - Reads all fields for BLE advertising
+ * Task priorities range from 0 (lowest) to 24 (highest) in FreeRTOS;
+ * high-priority tasks may have shorter mutex hold times to avoid starvation.
  *
  * SYNCHRONIZATION PATTERN:
  * FreeRTOS binary semaphore (mutex). All reads and writes must acquire lock:
