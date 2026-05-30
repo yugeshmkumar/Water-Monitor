@@ -16,6 +16,11 @@ final class ConnectionManager {
     // The host (IP or mDNS) that WiFi actually connected on — used to update SavedDevice.lastIP
     private(set) var connectedWiFiHost: String = ""
 
+    // UI State Management
+    var isLoadingWiFi: Bool = false
+    var wifiError: String?
+    var configError: String?
+
     private var dataCache: DataCache?
     private var deviceBootTime: Date?  // Used to reconstruct timestamps from queued readings
     private var lastWiFiAttempt: [String: Date] = [:]  // Track recent WiFi attempts by host
@@ -56,8 +61,12 @@ final class ConnectionManager {
                 }
             }
             Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(1500))
-                self?.flushQueueViaREST()
+                do {
+                    try await Task.sleep(for: .milliseconds(1500))
+                    self?.flushQueueViaREST()
+                } catch {
+                    print("[ConnectionManager] Task cancelled during queue flush delay: \(error)")
+                }
             }
         }
 
@@ -148,12 +157,20 @@ final class ConnectionManager {
         lastWiFiAttempt[host] = Date()
         wifi.configure(host: host)
         Task {
+            isLoadingWiFi = true
+            wifiError = nil
             print("[ConnectionManager] Trying WiFi: \(host)")
-            guard (try? await wifi.fetchStatus()) != nil else {
-                print("[ConnectionManager] WiFi failed: \(host)")
+            do {
+                _ = try await wifi.fetchStatus()
+                print("[ConnectionManager] WiFi connected: \(host)")
+                isLoadingWiFi = false
+            } catch {
+                let errorMsg = "WiFi failed: \(host) - \(error.localizedDescription)"
+                print("[ConnectionManager] \(errorMsg)")
+                wifiError = errorMsg
+                isLoadingWiFi = false
                 return
             }
-            print("[ConnectionManager] WiFi connected: \(host)")
             connectedWiFiHost = host
             // Disconnect any existing WiFi connection to prevent duplicate clients
             if transport == .wifi {
@@ -164,19 +181,29 @@ final class ConnectionManager {
             ble.disconnect()
             transport = .wifi
             Task {
-                if let cfg = try? await wifi.fetchConfig() {
+                do {
+                    let cfg = try await wifi.fetchConfig()
                     self.dataCache?.currentNodeID = cfg.nodeID
                     self.dataCache?.testModeEnabled = cfg.testingMode
+                    self.configError = nil
                     await MainActor.run {
                         self.onUpdateDevice?(cfg.nodeID)
                     }
+                } catch {
+                    let errorMsg = "Failed to fetch config: \(error.localizedDescription)"
+                    print("[ConnectionManager] \(errorMsg)")
+                    self.configError = errorMsg
                 }
             }
             // Drain the on-device queue BEFORE opening WebSocket — ESP32 can only handle one
             // persistent connection at a time alongside bulk HTTP requests
             await drainQueue()
             // Give ESP32 a moment to recover after queue flush
-            try? await Task.sleep(for: .seconds(2))
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                print("[ConnectionManager] Task cancelled during recovery delay: \(error)")
+            }
             // Queue is empty — now open WebSocket for live streaming
             print("[ConnectionManager] Opening WebSocket for live data...")
             wifi.connectWebSocket()
@@ -192,9 +219,9 @@ final class ConnectionManager {
         }
         
         let nodeID = ble.deviceConfig?.nodeID ?? "waterlevel-a"
-        
+
         // Try preferred IP first if provided, otherwise fall back to mDNS
-        if let ip = preferredIP, !ip.isEmpty {
+        if let ip = preferredIP, !ip.isEmpty, !ip.hasPrefix("0.0.0.0") {
             print("[ConnectionManager] Upgrading to WiFi using saved IP: \(ip)")
             tryWiFi(host: ip)
         } else {
@@ -295,8 +322,12 @@ final class ConnectionManager {
         if let ip = device.lastIP, !ip.isEmpty {
             print("[ConnectionManager] Attempting WiFi connection to \(ip)")
             tryWiFi(host: ip)
-            try? await Task.sleep(for: .seconds(2))
-            if isConnected { return }
+            do {
+                try await Task.sleep(for: .seconds(2))
+                if isConnected { return }
+            } catch {
+                print("[ConnectionManager] Task cancelled during WiFi connection wait: \(error)")
+            }
         }
 
         // Fall back to BLE scan
