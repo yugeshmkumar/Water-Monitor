@@ -1,7 +1,18 @@
 # Water Level Monitoring System — Implementation Architecture
-**Version:** 4.0 — Phase 2A cloud sync infrastructure planned; AWS backend + multi-device support  
+**Version:** 4.2 — Round 2 Code Audit: comprehensive firmware documentation, magic number extraction, iOS service refactoring, view splitting  
 **Hardware:** Seeed Studio XIAO ESP32-C6 + JSN-SR04T (Mode 0, trigger/echo) + Relay module  
-**Last updated:** Phase 2A (Cloud Sync) requirements, implementation guide, and architecture design added
+**Last updated:** Phase 1 documentation (50-70% ratio for all firmware headers) + Round 2 Audit issues identified and approved
+
+### Recent Changes (Round 2 Audit Cycle)
+- [x] **Phase 1: Firmware Documentation** ✅ COMPLETE
+  - device_state.h: 17% → 50% documentation (architecture, thread safety, usage patterns)
+  - api_server.h: 12% → 55% documentation (endpoints, WebSocket, OTA, connection limits)
+  - error_handler.h: 11% → 65% documentation (error codes, recovery strategies, reporting)
+  - queue_store.h: 12% → 70% documentation (circular buffer, flash wear analysis, ack flow)
+  - state.h: minimal → 65% documentation (mutex strategy, task priorities, performance notes)
+- [ ] **Phase 2: Extract Magic Numbers** — 3 firmware issues (in progress)
+- [ ] **Phase 3: iOS Service Refactoring** — 4 services to reduce responsibilities
+- [ ] **Phase 4: iOS View Splitting** — 8 large views to break into focused components
 
 ---
 
