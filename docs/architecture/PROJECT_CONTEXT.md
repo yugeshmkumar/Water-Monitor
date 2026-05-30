@@ -82,9 +82,9 @@ Do not use `git push origin master` as an authentication test; it can mutate the
 - `fixes`: require review when practical (prevent unreviewed integration work)
 - Signed commits are desirable if the team enables them; do not claim they are enforced unless GitHub branch protection confirms it.
 
-**Lesson from Experience:**
+**Lesson From Existing Project Notes:**
 
-During Round 2 Code Audit, audit work was mistakenly merged to `main` instead of `fixes`. This violated the immutable baseline rule. Prevention:
+Project audit notes describe a prior mistake where audit work was merged to `main` instead of `fixes`. Treat this as a standing warning even if branch history changes later. Prevention:
 - Always check branch name before merging: `git branch` shows current branch
 - Use GitHub branch protection to prevent direct pushes to `main`/`master`
 - Use `git log --oneline main` to verify `main` never changes after initial import
@@ -169,25 +169,25 @@ Update it in the same change whenever:
 - A planned item becomes implemented.
 - An implementation differs from the stated architecture.
 
-### P0.5 Zero Data Loss
+### P0.5 Zero Data Loss (Phase 1 & 2A Context)
 
-Data loss is unacceptable.
+Data loss is unacceptable in normal operation.
 
-Required behavior:
-- Device queues readings when app/cloud is unavailable.
-- App persists readings locally before acknowledging device queue entries.
-- Cloud ingest must be idempotent and deduplicate readings.
-- Do not clear device queue entries until the app has safely persisted them and, for cloud sync flows, has either synced them or recorded them in a durable app sync queue.
-- Test-mode/calibration readings must not pollute normal history and insights.
+**Phase 1 (Current):**
+- Device queues readings when app is unavailable (✅ LittleFS circular buffer, 2000 entries, 16 bytes each)
+- App persists readings before ACK'ing device entries (✅ RestClient + QueueDrainer + QueueImporter)
+- Test-mode readings excluded from history/analytics (✅ `isTest` flag filters data)
+- **Known limitation:** Queue overflow (>1hr offline @ max frequency) discards oldest unsent entries
+  - **Acceptable for Phase 1** (short WiFi outages, auto-reconnect limits downtime <5 min typical)
+  - **Mitigated in Phase 2A** by cloud sync every 30s
 
-Current implementation signals:
-- Firmware queue: LittleFS circular buffer, 2000 entries, 16 bytes each.
-- REST queue endpoints: `/api/queue/flush` and `/api/queue/ack`.
-- iOS models include `DeviceReading.isTest`.
-- `QueueDrainer`, `QueueImporter`, and `DataPruner` exist.
+**Phase 2A (Cloud Sync):**
+- Cloud ACK prevents local queue overflow
+- Idempotent dedup by (device_id, timestamp)
 
-Current risk:
-- SwiftData container creation deletes the old store after schema failure in `WaterMonitorApp.swift`. This is acceptable only during development. Production requires a migration strategy.
+Current risks:
+- SwiftData container deletion on schema failure (acceptable Phase 1 only; Phase 2 needs migration)
+- Queue overflow acceptable Phase 1; Phase 2A solves via cloud draining
 
 ### P0.6 Hardware Safety And Pin Rules
 
@@ -217,37 +217,39 @@ Required correction:
 - Set deployment target to iOS 17.0 unless a deliberate product decision raises it.
 - If using iOS 26-only APIs, document them and decide whether they are worth losing older devices.
 
-### P0.8 Permissions And Privacy Strings
+### P0.8 Permissions And Privacy Strings (Phase 1)
 
 The app uses:
-- CoreBluetooth
-- Local network connections to device REST/WebSocket endpoints
-- Notifications
+- CoreBluetooth (scanning, discovery, GATT read/write)
+- Local network connections (mDNS discovery, REST/WebSocket to device)
+- Notifications (low/high water level alerts)
 
-Required Info.plist/generated settings:
-- `NSBluetoothAlwaysUsageDescription`
-- `NSLocalNetworkUsageDescription`
-- `CFBundleDisplayName = "Water Monitor"`
-- If using Bonjour/mDNS service discovery explicitly, add `NSBonjourServices`.
-- If CoreBluetooth background work is required, add the Bluetooth background mode and document exactly why.
+Required Info.plist settings (Phase 1):
+- ✅ `NSBluetoothAlwaysUsageDescription` (exists)
+- ✅ `NSLocalNetworkUsageDescription` (exists)
+- [ ] `CFBundleDisplayName = "Water Monitor"` (missing; currently auto-generated as "WaterMonitor")
+- [ ] `NSBonjourServices` if mDNS discovery used (optional Phase 1)
+- [ ] Background BLE mode (optional if not needed for Phase 1)
 
 Current state:
-- Bluetooth and local network usage descriptions exist.
-- Display name is missing.
-- Bonjour services are not declared.
-- Background BLE mode is not declared.
+- Bluetooth usage description: present
+- Local network usage description: present
+- App display name: missing (fix before TestFlight/App Store)
+- Bonjour services declaration: not needed for Phase 1
 
 ### P0.9 Security Baseline
 
-Minimum security posture:
-- No long-lived AWS secrets in the iOS app.
-- Use Cognito Identity Pool temporary credentials for direct AWS access.
-- Use least-privilege IAM policies scoped to the user's allowed resources.
+Minimum security posture for Phase 1:
+- Never log WiFi passwords, Cognito tokens, AWS credentials, or private user data.
+- Local LAN REST endpoints may remain unauthenticated for Phase 1/private LAN development.
+- Validate GPIO3/GPIO14 are never used (RF switch lines on XIAO ESP32-C6).
+
+**Phase 2A (Cloud Sync) Security Requirements:**
+- No long-lived AWS secrets in iOS app; use Cognito temporary credentials only.
+- Least-privilege IAM policies scoped to user/device resources.
 - Validate device ownership server-side before accepting readings.
 - Do not expose unauthenticated cloud endpoints.
-- Local LAN REST endpoints may remain unauthenticated only for Phase 1/private LAN development; production must either document the risk or add pairing/token protection.
-- OTA must be treated as security-sensitive. Do not allow arbitrary remote firmware URLs in production without authentication, integrity checking, and rollback/recovery guidance.
-- Never log WiFi passwords, Cognito tokens, AWS credentials, or private user data.
+- OTA: authentication, integrity checking, and rollback/recovery guidance (not implemented Phase 1).
 
 ### P0.10 Branch And Git Safety
 
@@ -591,7 +593,7 @@ Keep this section factual and enforceable. Do not add incident details or "fixed
 
 - Put constants in `constants.h`.
 - Preserve `gState`/`gStateMutex` ownership.
-- Use `Config` for NVS.
+- Use `Config` for device config/NVS. Do not add new direct `Preferences` usage unless the architecture explicitly calls for a separate metadata namespace, as with current queue metadata.
 - Avoid blocking work in high-frequency tasks.
 - Be careful with AsyncWebServer callback context.
 - Queue writes and ACKs must be robust against reboot or partial failure.
@@ -628,7 +630,7 @@ Keep this section factual and enforceable. Do not add incident details or "fixed
 
 ## Testing Strategy (Phase Gate Readiness)
 
-Define what "tested and stable" means for Phase 1 → Phase 2 progression.
+Define what "tested and stable" means before enabling production Phase 2A cloud sync or opening the Phase 2 motor-controller gate. Phase 2A design documents can exist before this gate, but production implementation should not bypass these checks.
 
 ### Firmware Testing
 
@@ -716,16 +718,29 @@ Define what "tested and stable" means for Phase 1 → Phase 2 progression.
 | Integration tests | all critical paths | 🔄 P1 |
 | UI tests | core screens (dashboard, history, add device) | 🔄 P1 |
 
-### Phase 1 → Phase 2 Gate Criteria
+### Phase 1 → Production Phase 2A Gate Criteria
 
-Before starting Phase 2A cloud sync, Phase 1 must pass:
-- [ ] All firmware unit tests passing
-- [ ] 72-hour hardware soak test passed (no crashes)
-- [ ] iOS app integration tests passing (add device → dashboard → history)
-- [ ] BLE ↔ WiFi failover working reliably
-- [ ] Queue sync works offline → online
-- [ ] No data loss in normal operation
-- [ ] All P0 fixes applied and verified
+Before enabling production cloud sync, Phase 1 must pass all of:
+
+**Firmware:**
+- [ ] All firmware unit tests passing (`pytest` suite)
+- [ ] 72-hour hardware soak test completed (no crashes, reboots, or data corruption)
+- [ ] Sensor accuracy verified ±2cm across tank sizes
+- [ ] Queue overflow test: 100 readings/min for 2 hours, verify oldest unsent dropped correctly
+
+**iOS App:**
+- [ ] Integration test suite passing: add device → configure → view dashboard → history
+- [ ] BLE ↔ WiFi failover tested: enable/disable WiFi 3 times, verify no data loss or duplicate readings
+- [ ] Offline recovery tested: disconnect WiFi 1+ hour, reconnect, verify all pending readings synced
+
+**Data Integrity:**
+- [ ] No data loss in test sequences (100 queued readings, queue flush, ACK, app import all accounted)
+- [ ] Test-mode readings never appear in production history/insights
+
+**Operational:**
+- [ ] All P0 items in CLAUDE.md and P0.1-P0.10 here verified in code
+- [ ] Battery drain measured (if Phase 1 includes battery-backed devices)
+- [ ] Error logging verified (no silent failures in WiFi, queue, or calibration flows)
 
 ---
 
@@ -927,7 +942,7 @@ This section consolidates technical patterns, code quality metrics, and industry
 
 **Transport Priority (Hard Rule):**
 1. WiFi (REST + WebSocket) — preferred, fast, enables queue flush
-2. BLE — fallback, config-only, slower
+2. BLE — setup and fallback live/status/config path, slower and limited compared with WiFi
 3. Offline — queue + retry on reconnect
 
 **Keepalive & Auto-Reconnect:**
