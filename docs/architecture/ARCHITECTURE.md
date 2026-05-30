@@ -5,6 +5,18 @@
 
 ---
 
+## Table of Contents
+1. [Implementation Status](#implementation-status)
+   - [Firmware — Tank Sensor](#firmware--tank-sensor-sensor-unit)
+   - [iOS App — Phase 1](#ios-app--phase-1)
+   - [Phase 2A — Cloud Sync](#phase-2a--cloud-sync-infrastructure-in-progress)
+2. [Architecture Boundaries](#architecture-boundaries)
+3. [Credentials & Security](#credentials--security)
+4. [Build & Deployment](#build--deployment)
+5. [Performance & Optimization](#performance--optimization)
+
+---
+
 ## Implementation Status
 
 ### Firmware — Tank Sensor (sensor unit)
@@ -625,3 +637,103 @@ func calcWaterUsage(cycles: [PumpCycle], tankLitres: Double, since: Date) -> Dou
 | Opto-isolated relay module (5V, 10A) | 1 | HW-482 or equivalent |
 | DIN rail enclosure | 1 | Near motor DB panel |
 | 5V USB-C power supply | 1 | |
+
+---
+
+## Architecture Boundaries
+
+### Module Responsibilities
+
+**Firmware (ESP32)**
+- Sensor polling & filtering (Kalman + consensus window)
+- Local queue persistence (LittleFS) for offline resilience
+- BLE GATT advertisement and characteristic reads/writes
+- REST API for config, status, commands, OTA
+- WiFi connection and mDNS registration
+- MQTT pub/sub (optional, Phase 2)
+
+**iOS App**
+- User interface and device management
+- BLE scanning and pairing (CoreBluetooth)
+- WiFi network connection and status polling
+- Historical data storage (SwiftData)
+- Cloud sync (Phase 2A — SQS, DynamoDB via SyncQueueManager)
+- Notifications (UserNotifications)
+
+**AWS Cloud (Phase 2A)**
+- Message durability (SQS)
+- Historical analytics (DynamoDB, PostgreSQL)
+- User authentication (Cognito)
+- Serverless sync logic (Lambda)
+- Cost & anomaly alerts (SNS, CloudWatch)
+
+### No Responsibilities (Out of Scope)
+- Firmware does NOT store readings forever — delegates to iOS app via queue sync
+- iOS does NOT poll device history — relies on cloud sync from AWS
+- Cloud does NOT control motors — Phase 2B/2C (AWS IoT Core)
+
+---
+
+## Credentials & Security
+
+### WiFi & MQTT
+- WiFi SSID/password stored in NVS (encrypted by ESP32 PSRAM)
+- MQTT broker IP stored in config; no auth required (assume private LAN)
+- No TLS on local LAN (standard practice for IoT); TLS required for external MQTT
+
+### iOS App
+- Cognito user pools for identity (Phase 2A)
+- Temporary AWS SigV4 credentials issued by Cognito
+- Credentials expire hourly; app refreshes silently via Cognito SDK
+- No long-lived tokens stored locally
+
+### REST API
+- No authentication on LAN (local subnet only)
+- ElegantOTA uses browser; assumes physical network isolation
+- Phase 2B: API Gateway + IAM for cloud-facing endpoints
+
+---
+
+## Build & Deployment
+
+### Firmware
+- PlatformIO environment: `esp32-c6` with Arduino framework
+- Build: `platformio run -e esp32-c6`
+- Flash: USB-C; baud 460800 (auto-detected by VSCode)
+- OTA: ElegantOTA web interface at `<device-ip>/update`
+
+### iOS App
+- Minimum target: iOS 17.0 (SwiftData requirement)
+- Build: Xcode 15+, Swift 5.9+
+- Development team: configured in Xcode project
+- AppStore build: Xcode Cloud or local `xcodebuild archive`
+- Cognito integration: requires AWS credentials in Xcode environment (Phase 2A)
+
+### Cloud (Phase 2A)
+- CloudFormation template: `aws/cloudformation/stack.yaml`
+- Deploy: `aws cloudformation deploy --template-file stack.yaml --stack-name water-monitor`
+- Lambda runtime: Python 3.11
+- RDS: Multi-AZ PostgreSQL 14
+
+---
+
+## Performance & Optimization
+
+### Firmware
+- **Sensor**: 5-sample median + Kalman filter → 300ms latency per poll (configurable 10-30s interval)
+- **Memory**: Stack 12KB per task, heap ~100KB free after boot
+- **WiFi**: 15s connect timeout; 30s reconnect retry; mDNS lookup ~1-2s
+- **BLE**: Advertisement interval 2s; GATT MTU 517 bytes (config transfer ~600 bytes)
+- **Queue**: O(1) append/read via circular buffer; ~40 bytes per entry, 2000-entry capacity = ~80KB
+
+### iOS App
+- **UI**: Charts render 1000+ points in <500ms via Swift Charts + Canvas
+- **BLE**: Scan timeout 15s; discovery list updates every 1s
+- **History**: Fetch 30-day history in ~100ms (SwiftData indexed query)
+- **Cloud sync**: Batch 50 readings per SQS message; exponential backoff on failures
+
+### AWS
+- **SQS**: Message retention 14 days; throughput unlimited; cost ~$0.40/M messages
+- **Lambda**: 128MB heap, 3s timeout for dedup + RDS write
+- **DynamoDB**: On-demand pricing; ~0.3KB per reading; 1-year TTL
+- **RDS**: t3.micro instance; ~$30/month; max 500 connections
