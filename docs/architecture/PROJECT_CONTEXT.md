@@ -513,6 +513,131 @@ Rules:
 
 ---
 
+## Technical Standards & Best Practices (Round 2 Code Audit Results)
+
+This section consolidates technical patterns, code quality metrics, and industry validation from the comprehensive Round 2 Code Audit.
+
+### Firmware Architecture Patterns
+
+**FreeRTOS Task Structure:**
+- Sensor task: reads distance, applies Kalman filter (P = 1000.0f initial), updates gState under mutex
+- Comms task: WiFi connect, REST API, WebSocket `/live` with 30s keepalive ping
+- BLE task: NimBLE GATT server AA01-AA06 characteristics
+- Watchdog/monitoring: system health, queue overflow detection, recovery
+
+**State Management:**
+- All shared state in `gState` struct, guarded by `gStateMutex` (FreeRTOS mutex)
+- No nested locks (deadlock prevention)
+- Config centralized through `Config` class (NVS-backed, atomic writes)
+- Constants centralized in `constants.h` (zero hardcoded magic numbers)
+
+**Documentation Target: 50-70% ratio** (exceeds industry 40-50% standard)
+- Architecture overviews explaining WHY not just WHAT
+- Thread safety guarantees documented
+- Performance notes and limitations
+- Error codes with recovery strategies
+- Usage examples
+
+### iOS Architecture Patterns
+
+**MVVM + Service Architecture** (Post-Phase 3 Refactoring):
+
+| Layer | Pattern | Rules |
+|-------|---------|-------|
+| Views | SwiftUI components | Keep under 150 lines; one responsibility; use @State/@Binding |
+| ViewModels | @Published observable state | @MainActor if async; import Foundation only (not SwiftUI) |
+| Services | Focused on one domain | 8 services after refactoring (RestClient, WebSocketManager, BLENotificationHandler, TransportManager, QueueDrainer, QueueImporter, DataPruner, ConnectionManager as orchestrator) |
+| Models | SwiftData persistence | DeviceReading, SavedDevice, Tank; include `isTest` flag for filtering |
+
+**Single Responsibility Principle** (Validated via Phase 3):
+- RestClient = HTTP only (no WebSocket, no caching)
+- WebSocketManager = WebSocket only (no HTTP)
+- ConnectionManager = orchestrator (delegates to specific transports)
+- No circular dependencies
+- 532 lines redistributed across 8 new services in Phase 3
+
+**View Component Extraction** (Phase 4 Results):
+- 8 large views (567-426 lines) → 22 focused components (avg 110 lines)
+- Coordinator pattern: manage state machine + orchestrate components
+- Complexity reduction: 48-82% per view
+- Example: TankCalibrationView (567 lines) → 5 components + coordinator (150 lines total)
+
+### iOS Code Quality Metrics
+
+| Metric | Target | How to Check |
+|--------|--------|-------------|
+| Cyclomatic Complexity | ≤10 per function | SwiftLint (already integrated) |
+| Lines per Function | ≤30 (views), ≤50 (firmware) | Code review |
+| Method Count | ≤20 per class | Code review |
+| Test Coverage | ≥60% critical paths | XCTest + manual testing |
+| Documentation Ratio | 40-50% (standard), 50-70% (firmware) | Manual review |
+| Component Size | 100-200 lines ideal | Code review + refactor if >250 |
+
+### Communication Protocol Patterns
+
+**Transport Priority (Hard Rule):**
+1. WiFi (REST + WebSocket) — preferred, fast, enables queue flush
+2. BLE — fallback, config-only, slower
+3. Offline — queue + retry on reconnect
+
+**Keepalive & Auto-Reconnect:**
+- WebSocket: 30s server ping → client pong (automatic in URLSession)
+- Reconnect: 5s exponential backoff (5s → 10s → 30s → 1m)
+- Retry: 3 attempts REST (1s, 2s, 4s backoff), 2 attempts BLE
+
+**Queue Synchronization:**
+- Device: LittleFS circular buffer (2000 × 16 bytes)
+- App: POST /api/queue/flush, then POST /api/queue/ack per entry
+- Idempotent: ACK only persisted entries
+- Cloud: SQS standard queue → Lambda → RDS/DynamoDB
+
+### AWS Cloud Patterns
+
+**Cellular Architecture** (Failure domain isolation):
+- One DynamoDB table per service/device type (not global mapping table)
+- Separate RDS for relational queries (avoid hot-spot)
+- Per-device SQS queue or FIFO for ordering
+- In-memory Lambda cache: device_id → user_id (but don't assume persistence)
+
+**Idempotency Rules:**
+- Reads: never replayed (read-only operations)
+- Writes: SQS message ID + device_id + timestamp = idempotency key
+- Lambda: upsert/dedup before writes
+- DynamoDB: TTL 1 year, PITR enabled for recovery
+
+**Security Baseline:**
+- No long-lived AWS secrets in app (Cognito temporary credentials only)
+- Least-privilege IAM (specific resources per user/device)
+- Server-side ownership validation (device_users table)
+- OTA requires signed firmware + rollback support
+- Never log passwords, tokens, AWS credentials
+
+### Data Persistence Rules
+
+**iOS (SwiftData):**
+- Schema changes require migration planning (do NOT delete production stores)
+- Use DTOs for cloud sync queues (not SwiftData models)
+- Exclude `isTest == true` from history and insights
+- ModelContext is main-actor-sensitive
+
+**Firmware (NVS + LittleFS):**
+- NVS: centralize through `Config` class only
+- Queue: circular buffer, versioned format, survives reboot
+- Monitor: flash wear-leveling (1M cycle typical), check after 6-12 months
+- Backup: queue ACK semantics prevent data loss
+
+### Code Review Checklist (Mandatory Before Merge)
+
+- ✅ Documentation: 50-70% ratio headers, 40-50% services
+- ✅ Constants: no magic numbers (use constants.h or named consts)
+- ✅ Single Responsibility: each class does ONE thing
+- ✅ Thread Safety: mutex/queue/@MainActor used correctly
+- ✅ Error Handling: no silent `try?` in critical flows
+- ✅ Testing: unit tests for all public APIs
+- ✅ ARCHITECTURE.md: updated in same commit
+
+---
+
 ## External Standards Checked On 2026-05-30
 
 These links were used to validate platform-sensitive decisions. Re-check them when upgrading major SDKs, OS targets, cloud design, CI actions, or board hardware.
@@ -621,36 +746,20 @@ Use this as a short operational checklist:
 
 ---
 
-## Comprehensive Technical Standards (Round 2 Audit)
-
-**New:** For detailed firmware documentation standards, iOS MVVM patterns, service architecture, AWS cloud design patterns, code quality metrics, and industry best practices validated against 2026 standards, see:
-
-📄 **[CONTEXT_AND_STANDARDS.md](CONTEXT_AND_STANDARDS.md)** (Complete technical reference)
-
-This document covers:
-- Firmware architecture patterns (FreeRTOS task coordination, constants extraction, documentation ratio targets)
-- iOS MVVM + service refactoring (after Phase 3: 8 services, Single Responsibility achieved)
-- iOS view component extraction (after Phase 4: 22 focused components, 48-82% complexity reduction)
-- AWS cloud architecture (Cellular pattern, SQS-first ingest, idempotency, least-privilege IAM)
-- Code quality metrics (cyclomatic complexity, documentation ratios, testing standards)
-- BLE, WiFi, REST, WebSocket communication patterns
-- Common pitfalls and lessons learned from Round 2 Code Audit
-- External standards references from Apple, Espressif, AWS, OWASP
-
-**Use PROJECT_CONTEXT.md for:** strategic decisions, phase gates, P0-P3 priority backlog, coding rules, product identity.  
-**Use CONTEXT_AND_STANDARDS.md for:** detailed technical patterns, industry standards, code examples, quality metrics.
-
----
-
 ## Final AI Instruction
+
+**This file (PROJECT_CONTEXT.md) is the CANONICAL source of truth for all AI sessions.**
+
+It combines strategic decisions (P0-P3 priorities, product identity, phase gates) with technical standards (architecture patterns, code quality metrics, industry validation). Consult it FIRST for any Water Monitor work.
 
 When in doubt, optimize for:
 
 1. No data loss.
 2. Hardware safety.
 3. Clear phase boundaries.
-4. One canonical product identity.
-5. Source-backed platform decisions.
+4. One canonical product identity (Water Monitor).
+5. Source-backed platform decisions (see External Standards section).
 6. Small, testable changes.
 7. Updated architecture docs in the same change.
-8. Consult CONTEXT_AND_STANDARDS.md for detailed technical validation.
+8. Single Responsibility in all code (firmware, iOS, cloud).
+9. Complete documentation (50-70% ratio for firmware, 40-50% for services).

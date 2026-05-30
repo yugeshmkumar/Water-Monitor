@@ -133,11 +133,11 @@
 - [ ] Test multi-device syncing (same app, multiple tanks)
 
 #### Documentation (Phase 2A)
+- [x] `docs/architecture/PROJECT_CONTEXT.md` — Canonical AI/project context, priorities, naming, rules, standards, known corrections
 - [x] `docs/architecture/REQUIREMENTS.md` — Complete Phase 2 requirements
 - [x] `docs/architecture/IMPLEMENTATION_TODO.md` — Detailed TODO (2A/2B/2C)
 - [x] `docs/architecture/CLOUD_PERFORMANCE_ANALYSIS.md` — AWS vs Custom comparison
-- [x] `docs/api/PHASE_2A_AWS_IMPLEMENTATION.md` — Initial SQS-first architecture
-- [x] `docs/api/PHASE_2A_AWS_IMPLEMENTATION_REVISED.md` — **PRODUCTION-READY**, all issues fixed:
+- [x] `docs/api/PHASE_2A_IMPLEMENTATION.md` — **PRODUCTION-READY**, single comprehensive SQS-first architecture guide:
   - ✅ Cognito authentication + temporary credentials
   - ✅ Device ownership validation (Lambda checks user owns device)
   - ✅ Multi-tenant support (device_users table, permission checking)

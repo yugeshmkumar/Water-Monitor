@@ -71,6 +71,7 @@ See [ios-app/mobile/](ios-app/mobile/) for the SwiftUI app. Configuration and us
 
 | Document | Description |
 |---|---|
+| [Project Context](docs/architecture/PROJECT_CONTEXT.md) | Canonical AI/project context — priorities, naming, rules, standards, known corrections |
 | [Architecture](docs/architecture/ARCHITECTURE.md) | Complete system design — hardware, firmware, BLE/REST APIs, iOS app |
 | [Build & Flash](docs/firmware/build-and-flash.md) | PlatformIO build instructions and first-boot configuration |
 | [Wiring & BOM](docs/hardware/wiring-and-bom.md) | Hardware wiring diagram and bill of materials |
