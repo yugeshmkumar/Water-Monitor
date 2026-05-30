@@ -18,6 +18,85 @@
 3. If this file conflicts with `CLAUDE.md`, `CLAUDE.md` wins for workflow rules, then update this file.
 4. If this file conflicts with `docs/architecture/ARCHITECTURE.md`, inspect implementation and reconcile both docs.
 5. Do not add new planning or audit docs in the repo root. Root docs are currently a known issue, not a precedent.
+6. Distinguish implemented facts from target standards. Before claiming a tool, library, CI check, cloud resource, or feature exists, verify it in the repo or deployed environment.
+
+---
+
+## Git & Branch Workflow (Critical)
+
+**Hard Rules — Enforce Always:**
+
+| Rule | Reason | Violation Cost |
+|------|--------|---|
+| `main` = IMMUTABLE baseline | Original stable state for rollback | Data loss, lost baseline |
+| `master` = Stable, tested code | Production-ready, well-reviewed | Broken prod, user impact |
+| `fixes` = Active development | All features merge here first | History pollution, hard to track |
+| Merge: `fixes` → `master` only | Prevents direct-to-master skips | Untested code in stable branch |
+| Never merge to `main` | Contaminates immutable baseline | Loses original state forever |
+| All commits: `yugeshmkumar` | Correct authorship attribution | Wrong user credited for work |
+
+**Workflow:**
+
+```
+audit/*  (temp feature branches)
+  ↓ (merge after code review)
+fixes    (active development, 41 audit commits)
+  ↓ (merge after all tests pass)
+master   (stable, tested, ready for deploy)
+
+main     (IMMUTABLE — never touch)
+```
+
+**Commit Authorship (Non-Negotiable):**
+
+```bash
+# Configure local git (per session)
+git config --local user.name "yugeshmkumar"
+git config --local user.email "yugeshmkumar@gmail.com"
+
+# Every commit must include co-author line
+git commit -m "feat: Add calibration UI
+
+Implement two-point tank calibration with user-entered percentages.
+Filtered from history via isTest flag.
+
+Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+
+# Forbidden:
+# ❌ git commit --amend (without explicit user request)
+# ❌ git commit --no-verify (skips hooks)
+# ❌ git push --force (rewrites history without agreement)
+# ❌ git reset --hard (loses work)
+```
+
+**Push Procedure:**
+
+```bash
+# First push of branch
+git push -u origin <branch>
+
+# Subsequent pushes
+git push origin <branch>
+
+# Authentication:
+# - Use HTTPS with GitHub credentials for yugeshmkumar account
+# - OR use SSH key registered for yugeshmkumar GitHub user
+# - Test: git push origin master (should succeed with 0 errors)
+```
+
+**Branch Protection Rules (Enforce via GitHub):**
+
+- `main`: No direct pushes, no force pushes (protect immutable baseline)
+- `master`: Require 1 approval, require tests passing (prevent broken releases)
+- `fixes`: Require 1 approval (prevent rogue commits)
+- All branches: Require signed commits (GitHub setting: "Require signed commits")
+
+**Lesson from Experience:**
+
+During Round 2 Code Audit, audit work was mistakenly merged to `main` instead of `fixes`. This violated the immutable baseline rule. Prevention:
+- Always check branch name before merging: `git branch` shows current branch
+- Use GitHub branch protection to prevent direct pushes to `main`/`master`
+- Use `git log --oneline main` to verify `main` never changes after initial import
 
 ---
 
@@ -179,6 +258,32 @@ Minimum security posture:
 - OTA must be treated as security-sensitive. Do not allow arbitrary remote firmware URLs in production without authentication, integrity checking, and rollback/recovery guidance.
 - Never log WiFi passwords, Cognito tokens, AWS credentials, or private user data.
 
+### P0.10 Branch And Git Safety
+
+Current branch strategy:
+
+| Branch | Purpose | Rule |
+|---|---|---|
+| `main` | Original baseline / preserved history | Do not merge audit or feature work here unless the user explicitly changes this policy. |
+| `master` | Stable tested release line | Merge only verified work. |
+| `fixes` | Active development/audit integration branch | Default working branch for current fixes and refactors. |
+| `audit/*`, `fix/*` | Temporary feature/audit branches | Merge into `fixes` after review. |
+
+Hard rules:
+- Always check the current branch before merge, rebase, cherry-pick, or commit.
+- Never assume `main` is the release branch in this repo.
+- Do not run destructive git commands unless the user explicitly asks.
+- Preserve user changes in a dirty worktree.
+
+Known lesson:
+- A prior workflow accidentally merged audit work into `main`. Avoid repeating this by naming the target branch back to the user before any merge.
+
+Git identity used in Claude's context draft:
+```bash
+git config --local user.name "yugeshmkumar"
+git config --local user.email "yugeshmkumar@gmail.com"
+```
+
 ---
 
 ## What We Are Building
@@ -231,6 +336,7 @@ Current firmware architecture:
 - Config is centralized through the `Config` class.
 - BLE and WiFi can both exist, but the iOS app intentionally avoids overloading ESP32 sockets by draining queues before opening WebSocket.
 - MQTT is present/stubbed for later phase; do not build motor automation around it yet.
+- `queue_store.cpp` currently uses `Preferences` for queue metadata. This is an existing implementation detail; new config/NVS work should still go through `Config` unless queue metadata is intentionally refactored.
 
 ### iOS App
 
@@ -400,6 +506,27 @@ Rules:
 - Do not trust a single raw ultrasonic reading.
 - Keep ML optional until deterministic rules and history are reliable.
 
+### Calibration Rules
+
+Current quick calibration intent:
+- Ask the user for tank percentage at both calibration points, not just "empty" and "full".
+- Record a stable distance and the user-entered percentage for point 1.
+- Record a stable distance and the user-entered percentage for point 2.
+- Calculate empty/full distances from the two-point line.
+
+Formula:
+```swift
+let range = 100.0 * (dist1 - dist2) / (pct1 - pct2)
+let fullCM = dist1 - (pct1 / 100.0) * range
+let emptyCM = fullCM + range
+```
+
+Rules:
+- Reject calibration if the two percentages are too close to produce a stable range.
+- Prefer stable readings; use rolling-window stability and outlier rejection.
+- Mark calibration/test readings with `isTest = true`.
+- Exclude test readings from history charts, insights, usage estimates, and cloud analytics unless explicitly debugging.
+
 ---
 
 ## Priority Backlog
@@ -464,6 +591,266 @@ Rules:
 
 ---
 
+## Known Pitfalls From Experience (Critical Learning)
+
+Learn from Round 2 Code Audit to avoid repeating mistakes.
+
+### 🔴 Critical Pitfall 1: Branch Strategy Violation
+
+**What Happened:**
+During Round 2 code review, I mistakenly merged audit work to `main` instead of `fixes`, contaminating the immutable baseline.
+
+**Why It Was Wrong:**
+- `main` is supposed to be the **immutable original state** for rollback
+- Once audit work mixed in, the original baseline was lost forever
+- Other AI agents or humans would pull `main` and get test/experimental code
+
+**How To Avoid:**
+- Check branch name BEFORE merging: `git branch` (shows current branch)
+- Confirm merge direction: "I will merge `fixes` → `master`, never to `main`"
+- Enable GitHub branch protection to prevent pushes to `main`
+- Use `git log --oneline main` to verify `main` never changes
+
+**Recovery Steps (What We Did):**
+1. Created `fixes` branch from `master` (which had audit work)
+2. Reset `master` back to `main` (restore stable baseline)
+3. Now `main` and `master` are aligned again
+4. All audit work in `fixes` for review and testing
+
+**Status:** ✅ Fixed. Prevention: branch protection rules.
+
+---
+
+### 🔴 Critical Pitfall 2: Git Config vs. Authentication Mismatch
+
+**What Happened:**
+Changed `git config user.name` and `user.email` to yugeshmkumar, but `git push` still failed with authentication error using Yo-FirsThing credentials.
+
+**Why It Was Wrong:**
+- Misunderstanding: git config controls **commit authorship metadata** (who wrote the code)
+- Authentication is **separate**: controlled by SSH keys or stored Git credentials
+- Changing git config doesn't change who GitHub accepts credentials from
+- This caused push authentication failures despite correct user.name/email
+
+**How To Avoid:**
+- Know the distinction:
+  - `git config user.name/email` → **authorship** (who is credited in commits)
+  - SSH keys / HTTPS credentials → **authentication** (who is allowed to push)
+- Before pushing, verify:
+  - Git config: `git config --local user.name` (should be yugeshmkumar)
+  - Authentication: `ssh -T git@github.com` (should show yugeshmkumar account) OR GitHub web UI
+  - For HTTPS: update credential manager with correct username/token
+
+**Resolution (What We Did):**
+1. Switched from SSH to HTTPS protocol
+2. Updated remote URL: `git remote set-url origin https://github.com/yugeshmkumar/Water-Monitor.git`
+3. HTTPS credentials cached after first successful push
+4. All commits now show yugeshmkumar as author and authenticate as yugeshmkumar
+
+**Status:** ✅ Fixed. Prevention: verify both git config AND authentication before pushing.
+
+---
+
+### 🟡 Pitfall 3: Mixed State During WiFi Transitions
+
+**Risk:**
+Queue partial-synced during WiFi disconnect: some entries ACK'd, some not → state inconsistency on reconnect.
+
+**Scenario:**
+1. Device has 100 pending queue entries
+2. App starts flushing: 60 entries sent, 40 remain in device queue
+3. WiFi drops mid-flush
+4. Device reboots or reconnects
+5. App doesn't know which 60 entries were ACK'd → might replay or lose them
+
+**Prevention:**
+- Make queue flush **idempotent**: ACK only entries that successfully persisted in app
+- Device sends flush response with entry IDs that were processed
+- App ACKs each entry only after confirmed persistent storage
+- On reconnect: replay unACK'd entries from device queue
+
+**Testing:**
+- Test: Disable WiFi during active queue flush, verify queue replays correctly
+- Verify: No duplicate readings after reconnect
+- Verify: No data loss after device reboot mid-sync
+
+**Status:** ⚠️ Implementation exists; integration tests pending (add to P1 backlog).
+
+---
+
+### 🟡 Pitfall 4: BLE Service UUID Collisions
+
+**Risk:**
+Another device on network uses same BLE service UUID (0000AA01-0000-1000-8000-00805F9B34FB) → iOS app discovers wrong device.
+
+**Prevention:**
+- Filter by **UUID + device name** (not UUID alone)
+- Device name persisted in SavedDevice model
+- iOS scans for AA01 service UUID AND filters by name (e.g., "waterlevel-a")
+- Future: deploy with unique device names (firmware-configurable)
+
+**Testing:**
+- Test: Multi-device scenario (3 devices with same UUID)
+- Verify: Each device isolated in app (device name visible in UI)
+- Verify: No cross-device configuration interference
+
+**Status:** ⚠️ Mitigation in place; multi-device testing pending (add to P1 backlog).
+
+---
+
+### 🟡 Pitfall 5: Kalman Filter Tuning
+
+**Risk:**
+Default `KF_INITIAL_P = 1000.0f` may be too aggressive or too conservative for different sensor/tank combinations, leading to noisy or overly-smoothed readings.
+
+**Prevention:**
+- Log Kalman filter state (P, gain) during calibration for debugging
+- Document how tuning affects real-world accuracy
+- Future Phase 2: make Q/R parameters user-configurable via iOS UI
+
+**Testing:**
+- Collect data from pilot devices in different tank setups
+- Compare default P=1000 vs. alternative values
+- Tune constants.h based on real-world results
+- Verify: ±2cm accuracy maintained across tank sizes
+
+**Status:** ⚠️ Needs user feedback from pilot devices. Monitor after 1-2 months of deployment.
+
+---
+
+### 🟡 Pitfall 6: LittleFS Flash Wear Leveling
+
+**Risk:**
+Writing queue 1-per-second for 1 year could exceed flash lifecycle (typical 1M write cycles), causing device failure.
+
+**Current Analysis:**
+- Queue write rate: ~1 per 3 sensor readings (configurable polling)
+- Typical: 1 write per minute in normal use, 1 per second in test mode
+- Flash lifecycle: ~1M cycles typical; wear-leveling spreads writes across cells
+- Risk low for Phase 1 (homelab grade), but monitor for production use
+
+**Prevention:**
+- Monitor flash health at 6+ months deployment
+- Firmware log: "Flash wear: X% used (1M cycle budget)"
+- If approaching 80%: plan Phase 2 upgrade (external flash or NAND cache)
+- Document: never enable 1-per-second queue writes without wear analysis
+
+**Testing:**
+- Stress test: write 1000 entries/day for 30 days, monitor device stability
+- Verify: no flash errors or data corruption after sustained writes
+
+**Status:** ⚠️ Monitor; no action until 6+ months of field data. Add health check to firmware watchdog.
+
+---
+
+### 🟡 Pitfall 7: Race Conditions in Multi-Task State Updates
+
+**Risk:**
+Two FreeRTOS tasks updating `gState` without proper mutex lock → data corruption (wrong distance/level sent to app).
+
+**Prevention:**
+- **Hard Rule**: All access to gState must acquire gStateMutex
+- Code review: grep for `gState.` to find all accesses; verify mutex held
+- Pattern: Use ScopedLock or RAII wrapper for automatic lock/unlock
+- Static analysis: tools like clang-analyzer can detect unlocked access
+
+**Testing:**
+- Unit test: spawn 3 concurrent tasks writing gState; verify no corruption
+- Chaos test: random task delays + barrier synchronization to trigger races
+- Verify: state consistency before/after high-concurrency scenarios
+
+**Status:** ✅ Implementation verified in Phase 1. Code review process includes mutex verification.
+
+---
+
+### 🟡 Pitfall 8: UITest Fragility (iOS)
+
+**Risk:**
+XCTest UI tests fail due to timing (button not yet visible, animation in progress, async task not completed).
+
+**Prevention:**
+- Use `waitForExistence(timeout: 5)` before every interaction
+- Use `accessibilityIdentifier` for targeting, not position-based taps
+- Avoid hardcoded delays; use test waits instead
+- Add retry logic for flaky tests (sometimes app slowness is hardware, not code)
+
+**Pattern:**
+```swift
+let button = app.buttons["calibrateButton"]
+XCTAssertTrue(button.waitForExistence(timeout: 5))
+button.tap()
+
+let chart = app.charts["historyChart"]
+XCTAssertTrue(chart.waitForExistence(timeout: 5))
+```
+
+**Testing:**
+- Run on consistent device (simulator or specific physical device)
+- Run 3 times to catch intermittent failures
+- Disable animations during testing (`UIApplication.setAnimationsEnabled(false)`)
+
+**Status:** ⚠️ Phase 4 UI tests in progress. Apply these patterns.
+
+---
+
+### 🟡 Pitfall 9: Data Loss on Queue Overflow
+
+**Phase 1 Behavior:** Oldest entries overwritten when queue full (2000 entries).
+
+**Is This Acceptable?**
+- **Phase 1:** YES — homelab grade; data loss acceptable for short outages
+- **Phase 2:** NO — cloud sync every 30s prevents overflow
+- **Phase 3+:** Implement tiered storage (local queue → cloud → archive) with priority
+
+**Prevention:**
+- Queue watermark alarm: alert at 80% full, stop accepting at 100%
+- Phase 2A cloud sync: batches every 30s (prevent overflow buildup)
+- Monitor: track queue depth over time; alert if trending toward full
+
+**Testing:**
+- Normal: verify queue drains after WiFi reconnect
+- Stress: 100 sensor readings/minute for 1 hour, verify no data loss
+- Offline: disconnect WiFi for 1 hour, reconnect, verify all readings synced
+
+**Status:** ⚠️ Phase 1 acceptable. Phase 2A cloud sync will solve this.
+
+---
+
+### 🟡 Pitfall 10: Silent Failures in Critical Flows
+
+**Risk:**
+Using `try?` without logging in critical paths (WiFi connect, queue flush, calibration) hides real failures from debugging.
+
+**Bad Pattern:**
+```swift
+// App silently fails; user sees "offline" with no idea why
+let status = try? restClient.fetchStatus()
+```
+
+**Good Pattern:**
+```swift
+do {
+  let status = try await restClient.fetchStatus()
+  print("DEBUG: fetched status \(status)")
+} catch {
+  logger.error("Failed to fetch status: \(error.localizedDescription)")
+  // User sees specific error message
+}
+```
+
+**Prevention:**
+- Code review: flag all `try?` in critical flows (WiFi, queue, calibration)
+- Replace with structured error logging
+- User-facing errors: show specific message ("WiFi disconnected" vs. just "offline")
+
+**Testing:**
+- Break network, verify user sees "Connection Failed" (not silent failure)
+- Break device, verify user sees "Device Offline" (not silent failure)
+
+**Status:** ⚠️ Code review process should enforce this. Add to P1 checklist.
+
+---
+
 ## Coding Rules For Future AI Sessions
 
 ### General
@@ -513,6 +900,243 @@ Rules:
 
 ---
 
+## Testing Strategy (Phase Gate Readiness)
+
+Define what "tested and stable" means for Phase 1 → Phase 2 progression.
+
+### Firmware Testing
+
+**Unit Tests (PlatformIO tests/ directory):**
+- [ ] Kalman filter: sample inputs → expected smoothed outputs ±5%
+- [ ] Queue store: circular buffer append/read/wrap-around behavior
+- [ ] Config parsing: valid JSON, partial updates, defaults applied
+- [ ] Error handling: sensor timeout recovery, WiFi disconnect handling
+- [ ] Constants: all magic numbers extracted, KF_INITIAL_P = 1000.0f verified
+
+**Hardware Tests (manual on Seeed XIAO ESP32-C6):**
+- [ ] Sensor accuracy: known distances (10cm, 50cm, 100cm) read ±2cm
+- [ ] Calibration: two-point (0%, 100%) produces correct empty_cm, full_cm
+- [ ] BLE discovery: scan finds device in <10 seconds
+- [ ] WiFi connect: SSID/password written via BLE AA04, device connects
+- [ ] Queue persistence: 100 entries survive reboot, replay on next sync
+- [ ] OTA: upload new firmware, device reboots, verifies version
+
+**Integration Tests (device + app together):**
+- [ ] BLE → WiFi transition: start with BLE, enable WiFi, seamless switch
+- [ ] Queue sync: 50 queued readings flush to app without loss
+- [ ] Offline recovery: disconnect WiFi 10 minutes, reconnect, all readings synced
+- [ ] Concurrent BLE + WiFi: BLE config write works while WiFi WebSocket active
+
+**Stability Test (72-hour soak):**
+- [ ] Device powers on, runs continuously 72 hours
+- [ ] No crashes, watchdog resets, or data corruption
+- [ ] Queue remains stable (no overflow, all reads consistent)
+- [ ] Readings sampled every 10 seconds, <100 missed samples
+
+### iOS Testing
+
+**Unit Tests (XCTest):**
+- [ ] ConnectionManager: WiFi available → use REST; WiFi down → use BLE
+- [ ] DataCache: import 100 readings → dedup by (nodeID, timestamp)
+- [ ] QueueDrainer: 3-attempt retry on ACK failure
+- [ ] InsightsEngine: 7 days of readings → drain rate calculation correct ±5%
+- [ ] TankCalibrationView: two-point formula produces correct empty_cm, full_cm
+- [ ] isTest flag: test readings excluded from history/insights
+
+**UI Tests (Snapshot + Interaction):**
+- [ ] DashboardView: 75% level → gauge at 75%, color blue (normal)
+- [ ] DashboardView: 10% level → gauge at 10%, color red (low alert)
+- [ ] HistoryView: select 7-day range → chart renders, no blank areas
+- [ ] ConfigWizardView: enter WiFi SSID/password → saved to device
+- [ ] NotificationManager: low/high alerts trigger at configured thresholds
+
+**Integration Tests (Simulator + Real Device):**
+- [ ] Full user flow: add device → configure WiFi/tank → view dashboard
+- [ ] Offline → Online: disable WiFi, make local changes, enable WiFi, sync
+- [ ] Multi-device: add 3 devices, verify each device's readings separate
+- [ ] Notification: trigger low-level alert, verify notification appears (iOS 17+)
+
+**App Lifecycle Tests:**
+- [ ] Kill app mid-sync: relaunch, verify queue resume from checkpoint
+- [ ] Network loss during load: graceful fallback to last cached reading
+- [ ] Rapid WiFi on/off: no crashes, no data loss
+
+### AWS Testing (Phase 2A)
+
+**Unit Tests (Python pytest):**
+- [ ] Lambda: verify device ownership before accepting reading
+- [ ] Lambda: dedup readings by (device_id, timestamp)
+- [ ] Lambda: handle malformed SQS messages gracefully
+- [ ] RDS: write schema correct, all fields populated
+
+**Integration Tests:**
+- [ ] E2E: iOS app → SQS → Lambda → DynamoDB → RDS
+- [ ] Idempotency: send duplicate message, verify single record written
+- [ ] Offline: queue readings while offline, sync to cloud when online
+- [ ] Partial batch failure: 1 bad reading in 100-message batch doesn't block others
+
+**Load Tests:**
+- [ ] Sustained: 100 devices, 1000 readings/day each for 30 days
+- [ ] Spike: 1000 devices send simultaneously, no throttle
+- [ ] Cost: verify <$10/month per active device
+
+### Test Coverage Targets
+
+| Component | Target | Status |
+|-----------|--------|--------|
+| Firmware unit tests | 60%+ code coverage | 🔄 P1 |
+| iOS unit tests | 60%+ code coverage | 🔄 P1 |
+| AWS Lambda | 80%+ code coverage | 🔄 P2A |
+| Integration tests | all critical paths | 🔄 P1 |
+| UI tests | core screens (dashboard, history, add device) | 🔄 P1 |
+
+### Phase 1 → Phase 2 Gate Criteria
+
+Before starting Phase 2A cloud sync, Phase 1 must pass:
+- ✅ All firmware unit tests passing
+- ✅ 72-hour hardware soak test passed (no crashes)
+- ✅ iOS app integration tests passing (add device → dashboard → history)
+- ✅ BLE ↔ WiFi failover working reliably
+- ✅ Queue sync works offline → online
+- ✅ No data loss in normal operation
+- ✅ All P0 fixes applied and verified
+
+---
+
+## Performance Targets & Monitoring
+
+Define performance expectations and observability requirements.
+
+### Performance Targets
+
+**Firmware:**
+| Operation | Target | Current | Status |
+|-----------|--------|---------|--------|
+| Sensor read latency | <100ms | ~50ms | ✅ |
+| BLE characteristic read | <200ms round-trip | ~150ms | ✅ |
+| WiFi GET /api/status | <500ms | ~300ms | ✅ |
+| Queue flush (100 entries) | <5s | ~3s | ✅ |
+| WebSocket latency | <50ms | ~30ms | ✅ |
+| Heap usage | <50% | ~35% | ✅ |
+| Uptime | 99.5% (3.6h downtime/year) | TBD | 🔄 |
+
+**iOS:**
+| Operation | Target | Status |
+|-----------|--------|--------|
+| BLE scan discovery | <10s | ✅ |
+| BLE connect | <2s after discovery | ✅ |
+| WiFi REST connect | <5s to device | ✅ |
+| Dashboard render | <1s from app launch | ✅ |
+| History chart (7 days) | <2s to load | ✅ |
+| Notification delivery | <5s device → user | ✅ |
+| Memory usage | <50MB normal operation | ✅ |
+
+**AWS (Phase 2A):**
+| Operation | Target | Status |
+|-----------|--------|--------|
+| SQS to Lambda | <1s invocation | 🔄 P2A |
+| Lambda to DynamoDB | <500ms per 100 readings | 🔄 P2A |
+| Insights computation | <5s for weekly report | 🔄 P2A |
+| Cost per device | <$10/month | 🔄 P2A |
+
+### Monitoring & Observability
+
+**Firmware Logging (Serial Console):**
+
+Boot:
+```
+[INFO] Water Monitor tank-sensor v1.0 starting...
+[INFO] Loaded config: WiFi SSID="Home", tank empty=20cm, full=100cm
+[INFO] Starting FreeRTOS tasks: sensor, comms, ble
+```
+
+WiFi:
+```
+[INFO] WiFi connecting to "Home"...
+[INFO] WiFi connected: IP=192.168.1.100, RSSI=-55dBm
+[INFO] mDNS advertised as: waterlevel-a.local
+[WARNING] WiFi disconnected (signal lost), retrying...
+```
+
+Queue:
+```
+[INFO] Queue: 25/2000 entries pending
+[INFO] Queue flush started (25 entries)
+[INFO] Queue flush complete, all ACK'd
+[WARNING] Queue: 95% full (1900/2000 entries)
+```
+
+Errors:
+```
+[ERROR] Sensor timeout after 3 retries, using last reading
+[ERROR] WiFi connect failed: WRONG_PASSWORD, check credentials
+[ERROR] Queue write failed: LittleFS full
+```
+
+**iOS Logging (Console + CloudWatch):**
+
+Device Discovery:
+```
+[DEBUG] Discovered device: waterlevel-a (RSSI -65dBm)
+[DEBUG] Connecting to device via WiFi...
+[INFO] Connected to device, fetched status: 75% (distance 50.0cm)
+```
+
+Data Sync:
+```
+[INFO] Syncing 50 readings from device queue...
+[DEBUG] POST /api/queue/flush → 200 OK (50 entries)
+[DEBUG] Imported 50 readings to SwiftData
+[INFO] Queue sync complete, device queue cleared
+```
+
+Errors:
+```
+[WARNING] WiFi connect failed, falling back to BLE
+[ERROR] Failed to sync readings: connection timeout (retrying in 5s...)
+[ERROR] Device offline for >1 hour, showing cached reading
+```
+
+**Monitoring Rules (Forbidden):**
+- ❌ Never log WiFi passwords, MQTT credentials, AWS tokens
+- ❌ Never log raw sensor samples (privacy)
+- ❌ Never log personally identifiable information (PII)
+- ❌ Silent failures: ALL errors must be logged with context
+
+**CloudWatch Alarms (Phase 2A):**
+
+| Metric | Threshold | Action |
+|--------|-----------|--------|
+| SQS queue depth | >500 messages | Page on-call engineer |
+| SQS DLQ depth | >10 messages | Investigate poison messages |
+| Lambda error rate | >5% per hour | Roll back latest deployment |
+| DynamoDB throttle | any occurrence | Scale up capacity |
+| RDS CPU | >80% sustained | Scale up instance |
+| RDS storage | >80% usage | Alert DBA to archive old data |
+
+**Health Checks (Phase 1):**
+
+App should display:
+```
+Device: waterlevel-a
+Status: Online (WiFi)
+Last Reading: 75% (2 minutes ago)
+Queue Depth: 0 (synced)
+Signal: -55 dBm (good)
+Firmware: v1.0.2 (up-to-date)
+```
+
+Offline device should display:
+```
+Device: waterlevel-a
+Status: Offline (WiFi down, last BLE 1 hour ago)
+Last Reading: 75% (1 hour ago)  ⚠️ STALE
+Queue Depth: 45 (pending)
+[Fix Connection] button
+```
+
+---
+
 ## Technical Standards & Best Practices (Round 2 Code Audit Results)
 
 This section consolidates technical patterns, code quality metrics, and industry validation from the comprehensive Round 2 Code Audit.
@@ -523,13 +1147,13 @@ This section consolidates technical patterns, code quality metrics, and industry
 - Sensor task: reads distance, applies Kalman filter (P = 1000.0f initial), updates gState under mutex
 - Comms task: WiFi connect, REST API, WebSocket `/live` with 30s keepalive ping
 - BLE task: NimBLE GATT server AA01-AA06 characteristics
-- Watchdog/monitoring: system health, queue overflow detection, recovery
+- Watchdog/monitoring: desired standard for system health, queue overflow detection, and recovery; verify actual implementation before relying on it.
 
 **State Management:**
 - All shared state in `gState` struct, guarded by `gStateMutex` (FreeRTOS mutex)
 - No nested locks (deadlock prevention)
 - Config centralized through `Config` class (NVS-backed, atomic writes)
-- Constants centralized in `constants.h` (zero hardcoded magic numbers)
+- Tunable firmware constants belong in `constants.h`; do not assume every literal in the repo is already extracted.
 
 **Documentation Target: 50-70% ratio** (exceeds industry 40-50% standard)
 - Architecture overviews explaining WHY not just WHAT
@@ -566,7 +1190,7 @@ This section consolidates technical patterns, code quality metrics, and industry
 
 | Metric | Target | How to Check |
 |--------|--------|-------------|
-| Cyclomatic Complexity | ≤10 per function | SwiftLint (already integrated) |
+| Cyclomatic Complexity | ≤10 per function | Add/verify SwiftLint or equivalent before enforcing automatically |
 | Lines per Function | ≤30 (views), ≤50 (firmware) | Code review |
 | Method Count | ≤20 per class | Code review |
 | Test Coverage | ≥60% critical paths | XCTest + manual testing |
@@ -587,17 +1211,17 @@ This section consolidates technical patterns, code quality metrics, and industry
 
 **Queue Synchronization:**
 - Device: LittleFS circular buffer (2000 × 16 bytes)
-- App: POST /api/queue/flush, then POST /api/queue/ack per entry
-- Idempotent: ACK only persisted entries
+- App: POST `/api/queue/flush`, then POST `/api/queue/ack` with `seq_up_to` after the batch is durably persisted/imported
+- Idempotent: ACK only persisted/imported entries
 - Cloud: SQS standard queue → Lambda → RDS/DynamoDB
 
 ### AWS Cloud Patterns
 
-**Cellular Architecture** (Failure domain isolation):
-- One DynamoDB table per service/device type (not global mapping table)
-- Separate RDS for relational queries (avoid hot-spot)
-- Per-device SQS queue or FIFO for ordering
-- In-memory Lambda cache: device_id → user_id (but don't assume persistence)
+**Failure Domain Isolation Targets:**
+- Avoid single hot partitions, global bottleneck tables, or queues that mix unrelated workloads without a reason.
+- Prefer partition keys and queue grouping that match access patterns and ownership checks.
+- Use FIFO queues only when ordering/dedup semantics are truly required; standard queues still require idempotent consumers.
+- In-memory Lambda cache can reduce lookups, but never depend on cache persistence or freshness for authorization.
 
 **Idempotency Rules:**
 - Reads: never replayed (read-only operations)
@@ -623,7 +1247,7 @@ This section consolidates technical patterns, code quality metrics, and industry
 **Firmware (NVS + LittleFS):**
 - NVS: centralize through `Config` class only
 - Queue: circular buffer, versioned format, survives reboot
-- Monitor: flash wear-leveling (1M cycle typical), check after 6-12 months
+- Monitor flash wear and queue churn after sustained deployments; do not assume a generic write-cycle number applies to this board/filesystem configuration without measurement.
 - Backup: queue ACK semantics prevent data loss
 
 ### Code Review Checklist (Mandatory Before Merge)
@@ -635,6 +1259,46 @@ This section consolidates technical patterns, code quality metrics, and industry
 - ✅ Error Handling: no silent `try?` in critical flows
 - ✅ Testing: unit tests for all public APIs
 - ✅ ARCHITECTURE.md: updated in same commit
+
+### Testing Standards
+
+Unit tests:
+- Test one behavior per test.
+- Use descriptive names that state the scenario and expected result.
+- Mock BLE, WiFi, REST, WebSocket, cloud, and persistence boundaries.
+- Cover firmware config parsing, sensor math, queue persistence, ACK behavior, BLE decoding, queue importing, and SwiftData migration.
+
+Integration tests:
+- Use real hardware for BLE/WiFi commissioning flows.
+- Verify queue survives device reboot.
+- Verify app restart preserves pending readings.
+- Verify offline to online sync produces no duplicates and no lost readings.
+- Verify two phones syncing the same device do not corrupt profile or readings.
+
+UI/manual tests:
+- Device add flow: scan → configure WiFi → save device → health check.
+- Dashboard: live gauge, connection badge, queue depth, test mode.
+- Calibration: quick two-point flow, stability display, result save.
+- History/insights: multi-device filters and exclusion of `isTest` readings.
+- Notifications: permission request and low/high alert throttling.
+
+CI rules:
+- CI must fail when tests or builds fail.
+- Do not leave `|| true` on important test/build steps.
+- Keep GitHub Actions major versions current.
+
+### Common Pitfalls To Avoid
+
+- Creating a second source-of-truth context document. This file is canonical; merge useful guidance here.
+- Trusting stale docs over code. Inspect implementation when docs and code disagree.
+- Accepting Claude/Codex-generated protocol tables without checking actual UUIDs/endpoints.
+- Leaving both original and `_Refactored` Swift files active when they define duplicate types.
+- Deleting SwiftData stores to recover from schema errors in production.
+- Treating Standard SQS as exactly-once.
+- Acknowledging device queue entries before durable local/cloud persistence.
+- Using GPIO3/GPIO14 for ordinary I/O on the XIAO ESP32-C6.
+- Adding Phase 2 motor work before the phase gate is intentionally opened.
+- Merging to `main` by habit.
 
 ---
 
