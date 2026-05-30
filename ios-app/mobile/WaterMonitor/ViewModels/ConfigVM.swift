@@ -40,10 +40,20 @@ final class ConfigVM {
 
     var pinsConflict: Bool { edited.pinTrig == edited.pinEcho }
 
+    // asDictionary(_:)
+    // ────────────────────────────────────────────────────────
+    // Converts a DeviceConfig object to a dictionary for API patching.
+    // Returns empty dict on encoding error (non-critical path).
     private func asDictionary(_ c: DeviceConfig) -> [String: Any] {
-        guard let data = try? JSONEncoder().encode(c),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
-        return dict
+        do {
+            let data = try JSONEncoder().encode(c)
+            guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return [:]
+            }
+            return dict
+        } catch {
+            print("[ConfigVM] Failed to encode config: \(error)")
+            return [:]
+        }
     }
 }
