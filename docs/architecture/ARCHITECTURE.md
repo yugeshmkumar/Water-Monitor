@@ -1,7 +1,7 @@
 # Water Level Monitoring System — Implementation Architecture
-**Version:** 4.0 — Phase 2A cloud sync infrastructure planned; AWS backend + multi-device support  
+**Version:** 4.1 — Phase 1 complete, Round 2 audit identifies 22 code quality issues for refinement  
 **Hardware:** Seeed Studio XIAO ESP32-C6 + JSN-SR04T (Mode 0, trigger/echo) + Relay module  
-**Last updated:** Phase 2A (Cloud Sync) requirements, implementation guide, and architecture design added
+**Last updated:** Round 2 comprehensive codebase audit (22 issues identified across firmware, iOS, documentation)
 
 ---
 
@@ -14,6 +14,7 @@
 3. [Credentials & Security](#credentials--security)
 4. [Build & Deployment](#build--deployment)
 5. [Performance & Optimization](#performance--optimization)
+6. [Current Code Quality Issues](#current-code-quality-issues-round-2-audit)
 
 ---
 
@@ -737,3 +738,51 @@ func calcWaterUsage(cycles: [PumpCycle], tankLitres: Double, since: Date) -> Dou
 - **Lambda**: 128MB heap, 3s timeout for dedup + RDS write
 - **DynamoDB**: On-demand pricing; ~0.3KB per reading; 1-year TTL
 - **RDS**: t3.micro instance; ~$30/month; max 500 connections
+
+---
+
+## Current Code Quality Issues (Round 2 Audit)
+
+**Status**: 22 issues identified, organized into 4 fix phases. See `docs/analysis/CODEBASE_AUDIT_ROUND_2.md` for details.
+
+### Issues Summary
+
+| Category | Count | Status | Priority |
+|----------|-------|--------|----------|
+| Documentation (firmware headers) | 5 | Pending | MEDIUM |
+| Firmware (magic numbers) | 3 | Pending | MEDIUM |
+| iOS Services (responsibilities) | 4 | Pending | MEDIUM |
+| iOS Views (component size) | 8 | Pending | MEDIUM |
+| Architecture (ConnectionManager) | 1 | Pending | MEDIUM |
+
+### Key Issues by Phase
+
+**Phase 1: Documentation (1-2 hrs)**
+- `device_state.h`, `api_server.h`, `error_handler.h`, `queue_store.h`, `state.h` under-documented (<20%)
+
+**Phase 2: Firmware Cleanup (30 min)**
+- `queue_store.cpp`, `sensor.cpp` (7 numeric comparisons), `api_server.cpp` (1 numeric comparison)
+
+**Phase 3: iOS Service Refactoring (4-6 hrs)**
+- `ConnectionManager` (25 properties, 367 lines) → split into 3 focused services
+- `InsightsEngine` (28 properties, 423 lines) → split into 3 analyzers
+- `BLEService` (15 properties), `WiFiService` (14 properties) → extract concerns
+
+**Phase 4: iOS View Refactoring (6-8 hrs)**
+- `TankCalibrationView` (568 lines, largest) → 3 sub-views
+- `InsightsView` (427 lines), `HistoryView` (245 lines), `AddDeviceView` (224 lines) → split
+- Other views (DeviceHealthCheck, ConfigWizard, DeviceDetail, Dashboard) → 2 sub-views each
+
+### Architectural Improvements Needed
+
+1. **Service Decomposition**: Break oversized services into single-responsibility managers
+2. **View Composition**: Split large SwiftUI components into focused, testable sub-components
+3. **Documentation**: Improve header-only library documentation to >40% ratio
+4. **Magic Numbers**: Eliminate numeric comparisons; use named constants
+
+### Industry Best Practices Gaps
+
+- Component sizes: Current max 568 lines (target < 150 lines)
+- Service properties: Current max 28 (target < 8)
+- Documentation ratio: Current min 11% (target > 40%)
+- Error granularity: 8 error codes (target > 20)
