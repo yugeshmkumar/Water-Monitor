@@ -11,6 +11,7 @@
 #include "queue_store.h"
 #include "ble_server.h"
 #include "api_server.h"
+#include "constants.h"
 
 // ─── Shared state (defined here, declared extern in state.h) ──
 DeviceState       gState;
@@ -24,8 +25,8 @@ static bool         mqttConfigured = false;
 static void mqttEnsureConnected() {
     if (strlen(config.d.mqtt_broker_ip) == 0) return;
     if (!mqttConfigured) {
-        mqttClient.setServer(config.d.mqtt_broker_ip, 1883);
-        mqttClient.setBufferSize(1024);
+        mqttClient.setServer(config.d.mqtt_broker_ip, MQTT_BROKER_PORT);
+        mqttClient.setBufferSize(MQTT_BUFFER_SIZE);
         mqttConfigured = true;
     }
     if (!mqttClient.connected()) {
@@ -35,7 +36,7 @@ static void mqttEnsureConnected() {
 
 static void mqttPublishLevel(float dist, uint8_t pct, uint32_t ts) {
     if (!mqttClient.connected()) return;
-    char buf[192];
+    char buf[MQTT_PUBLISH_BUFFER_SIZE];
     snprintf(buf, sizeof(buf),
              "{\"node\":\"%s\",\"ts\":%lu,\"level_pct\":%u,"
              "\"distance_cm\":%.1f,\"sensor_ok\":true,\"queued\":false}",
@@ -48,7 +49,7 @@ static void mqttFlushQueue() {
 
     JsonDocument doc;
     JsonArray arr = doc.to<JsonArray>();
-    queueStore.getUnsent(arr, 50);
+    queueStore.getUnsent(arr, QUEUE_FLUSH_MAX_ENTRIES);
     if (arr.size() == 0) return;
 
     String payload;
@@ -69,8 +70,8 @@ static bool wifiConnect() {
     Serial.printf("[WiFi] Connecting to \"%s\"", config.d.wifi_ssid);
 
     unsigned long start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-        delay(500);
+    while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+        delay(WIFI_CONNECT_RETRY_DELAY_MS);
         Serial.print('.');
     }
     Serial.println();
@@ -93,7 +94,7 @@ static void sensorTask(void* pv) {
     Serial.println("[Sensor] Task started");
 
     // Wait for sensor module to stabilize after power-on
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(SENSOR_STARTUP_DELAY_MS));
 
     // Auto-calibration tracking
     float lastLevel = 50.0f;  // last known level %
@@ -107,7 +108,7 @@ static void sensorTask(void* pv) {
         if (!ok) {
             // Still seeking stable readings — normal during startup or after filter reset
             // Don't spam logs, just wait
-            vTaskDelay(pdMS_TO_TICKS(2000));
+            vTaskDelay(pdMS_TO_TICKS(SENSOR_ERROR_RETRY_DELAY_MS));
             continue;
         }
 
@@ -118,7 +119,7 @@ static void sensorTask(void* pv) {
                                                 config.d.tank_empty_cm,
                                                 config.d.tank_full_cm);
 
-        if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(100))) {
+        if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(STATE_MUTEX_TIMEOUT_LONG_MS))) {
             gState.distance_cm = dist;
             gState.level_pct   = pct;
             gState.sensor_ok   = true;
@@ -130,7 +131,7 @@ static void sensorTask(void* pv) {
         bleServer.notifyLevel(dist, pct, ts);
 
         digitalWrite(PIN_LED, HIGH);
-        delay(30);
+        delay(LED_FLASH_DURATION_MS);
         digitalWrite(PIN_LED, LOW);
 
         // ── Auto-calibration: track min/max and detect cycles ──────────────────
@@ -144,14 +145,14 @@ static void sensorTask(void* pv) {
             }
 
             // Detect fill/drain cycles: if level changes > 20% between readings
-            if (abs((int)pct - (int)lastLevel) > 20) {
-                if (cycleStartTs == 0 || (ts - cycleStartTs) > 600) {  // min 10 min between cycles
+            if (abs((int)pct - (int)lastLevel) > CALIBRATION_LEVEL_CHANGE_THRESHOLD) {
+                if (cycleStartTs == 0 || (ts - cycleStartTs) > CALIBRATION_MIN_CYCLE_INTERVAL_S) {
                     config.d.calibration_cycles++;
                     cycleStartTs = ts;
                     // Confidence increases: 10% per cycle, cap at 90%
-                    if (config.d.calibration_confidence < 90) {
+                    if (config.d.calibration_confidence < CALIBRATION_CONFIDENCE_MAX) {
                         config.d.calibration_confidence = (uint8_t)min(
-                            (int)config.d.calibration_confidence + 10, 90
+                            (int)config.d.calibration_confidence + CALIBRATION_CONFIDENCE_INCREMENT, CALIBRATION_CONFIDENCE_MAX
                         );
                     }
                     config.save();
@@ -201,7 +202,7 @@ static void commsTask(void* pv) {
             mqttEnsureConnected();
             mqttClient.loop();
 
-            if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(50))) {
+            if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(STATE_MUTEX_TIMEOUT_MS))) {
                 gState.wifi_ok     = true;
                 gState.wifi_rssi   = rssi;
                 gState.queue_depth = queueStore.pendingCount();
@@ -225,7 +226,7 @@ static void commsTask(void* pv) {
             queueStore.processPending();
 
         } else {
-            if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(50))) {
+            if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(STATE_MUTEX_TIMEOUT_MS))) {
                 gState.wifi_ok   = false;
                 gState.wifi_rssi = 0;
                 snap = gState;
@@ -234,7 +235,7 @@ static void commsTask(void* pv) {
             bleServer.notifyStatus(false, snap.sensor_ok, 0, queueStore.pendingCount());
         }
 
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(COMMS_TASK_LOOP_DELAY_MS));
     }
 }
 
@@ -242,15 +243,15 @@ static void bleTask(void* pv) {
     bleServer.begin();
     while (true) {
         bleServer.loop();
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(BLE_TASK_LOOP_DELAY_MS));
     }
 }
 
 // ─── Arduino entry points ─────────────────────────────────────
 
 void setup() {
-    Serial.begin(115200);
-    delay(200);
+    Serial.begin(SERIAL_BAUD_RATE);
+    delay(SERIAL_INIT_DELAY_MS);
     Serial.println("\n[Boot] Water Level Monitor v1.0 — Node A (XIAO ESP32-C6)");
 
     pinMode(PIN_LED, OUTPUT);
@@ -280,14 +281,14 @@ void setup() {
 
     digitalWrite(PIN_LED, LOW);
 
-    xTaskCreate(sensorTask, "sensor", 4096, NULL, 3, NULL);
-    xTaskCreate(commsTask,  "comms",  8192, NULL, 2, NULL);
-    xTaskCreate(bleTask,    "ble",    10240, NULL, 1, NULL);
+    xTaskCreate(sensorTask, "sensor", SENSOR_TASK_STACK_SIZE, NULL, SENSOR_TASK_PRIORITY, NULL);
+    xTaskCreate(commsTask,  "comms",  COMMS_TASK_STACK_SIZE, NULL, COMMS_TASK_PRIORITY, NULL);
+    xTaskCreate(bleTask,    "ble",    BLE_TASK_STACK_SIZE, NULL, BLE_TASK_PRIORITY, NULL);
 
     Serial.println("[Boot] OK — tasks started");
 }
 
 void loop() {
     // Idle — all work is done in FreeRTOS tasks above
-    vTaskDelay(pdMS_TO_TICKS(10000));
+    vTaskDelay(pdMS_TO_TICKS(MAIN_LOOP_IDLE_DELAY_MS));
 }

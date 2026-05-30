@@ -1,44 +1,19 @@
 #include "sensor.h"
 #include "config.h"
 #include "pins.h"
+#include "constants.h"
 #include <ArduinoJson.h>
 #include <math.h>
-
-#define SOUND_SPEED_CM_US  0.0343f
-#define TRIG_PULSE_US      15
-#define ECHO_TIMEOUT_US    30000UL
-
-// ── Multi-sample constants ────────────────────────────────────────────────────
-// 5 samples × 60 ms = 300 ms per poll call
-#define READINGS_N       5
-#define READING_DELAY_MS 60
-
-// ── Kalman filter parameters ──────────────────────────────────────────────────
-// Layer 1: per-reading noise filter (runs on every hardware median).
-// Q: how much can true distance change per poll? σ≈2 cm → Q=4.
-// R: JSN-SR04T sensor noise σ≈5 cm → R=25.
-// OUTLIER_SIGMA: reject if innovation > 3 standard deviations (99.7% confidence).
-#define KF_Q             4.0f
-#define KF_R             25.0f
-#define KF_OUTLIER_SIGMA 3.0f
-#define KF_MAX_REJECT_STREAK 6
 
 static float kfState   = -1.0f;
 static float kfP       = 1000.0f;
 static int   kfRejects = 0;
 
-// ── Consensus confirmation window ─────────────────────────────────────────────
-// Layer 2: only report a level when N_CONFIRM consecutive Kalman-accepted readings
-// agree within CONFIRM_TOL_CM of each other.  A single spurious reading that sneaks
-// past the Kalman filter will reset the window and trigger a 2 s retry cycle.
-// Once stable, each new in-tolerance reading slides the window — no extra retries.
-#define CONFIRM_N   3
-
 // Tolerance scales with tank size: 3 % of range, minimum 5 cm.
 // For a 130 cm range → 5 cm.  For a 200 cm range → 6 cm.
 static inline float confirmTol() {
     float range = config.d.tank_empty_cm - config.d.tank_full_cm;
-    return fmaxf(range * 0.03f, 5.0f);
+    return fmaxf(range * CONFIRM_TOL_PERCENT, CONFIRM_TOL_MIN_CM);
 }
 
 // State machine for the confirmation window
@@ -51,7 +26,7 @@ static float        csConfirmed   = -1.0f;  // last published stable value
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 static float takeOnePulse() {
-    digitalWrite(PIN_TRIG, LOW);  delayMicroseconds(4);
+    digitalWrite(PIN_TRIG, LOW);  delayMicroseconds(SENSOR_ECHO_PRE_DELAY_US);
     digitalWrite(PIN_TRIG, HIGH); delayMicroseconds(TRIG_PULSE_US);
     digitalWrite(PIN_TRIG, LOW);
     long dur = pulseIn(PIN_ECHO, HIGH, ECHO_TIMEOUT_US);
@@ -212,18 +187,18 @@ static float kalmanUpdate(float measurement) {
 
 float readDistanceCM() {
     // Step 1: multi-sample median — removes single-pulse hardware noise
-    float buf[READINGS_N];
+    float buf[SENSOR_READINGS_PER_SAMPLE];
     int   valid = 0;
-    for (int i = 0; i < READINGS_N; i++) {
+    for (int i = 0; i < SENSOR_READINGS_PER_SAMPLE; i++) {
         float d = takeOnePulse();
-        if (d >= 20.0f && d <= 600.0f) buf[valid++] = d;
-        if (i < READINGS_N - 1) delay(READING_DELAY_MS);
+        if (d >= SENSOR_MIN_DISTANCE_CM && d <= SENSOR_MAX_DISTANCE_CM) buf[valid++] = d;
+        if (i < SENSOR_READINGS_PER_SAMPLE - 1) delay(SENSOR_READING_DELAY_MS);
     }
-    if (valid < 3) {
+    if (valid < SENSOR_MIN_VALID_PULSES) {
         // Not enough valid pulses — sensor may be disconnected or pins wrong
         static unsigned long lastWarn = 0;
-        if (millis() - lastWarn > 10000) {  // Log warning once per 10s to avoid spam
-            Serial.printf("[Sensor] WARNING: Only %d/%d valid pulses. Check sensor connection and pins (TRIG=D2, ECHO=D1)\n", valid, READINGS_N);
+        if (millis() - lastWarn > SENSOR_WARNING_LOG_INTERVAL_MS) {  // Log warning once per 10s to avoid spam
+            Serial.printf("[Sensor] WARNING: Only %d/%d valid pulses. Check sensor connection and pins (TRIG=D2, ECHO=D1)\n", valid, SENSOR_READINGS_PER_SAMPLE);
             lastWarn = millis();
         }
         return -1.0f;
@@ -251,8 +226,8 @@ void resetSensorFilter() {
 }
 
 float computeLevelPct(float distCM, float emptyDist, float fullDist) {
-    float pct = 100.0f * (emptyDist - distCM) / (emptyDist - fullDist);
-    return constrain(pct, 0.0f, 100.0f);
+    float pct = LEVEL_PERCENTAGE_SCALE * (emptyDist - distCM) / (emptyDist - fullDist);
+    return constrain(pct, 0.0f, LEVEL_PERCENTAGE_SCALE);
 }
 
 uint8_t resolvePin(const String& name) {
@@ -317,7 +292,7 @@ void handlePinCommand(const char* json, char* resultBuf, size_t bufLen) {
         if (strcmp(periph, "trig") == 0) {
             pinMode(gpio, OUTPUT);
             digitalWrite(gpio, LOW); delayMicroseconds(4);
-            digitalWrite(gpio, HIGH); delayMicroseconds(15);
+            digitalWrite(gpio, HIGH); delayMicroseconds(TRIG_PULSE_US);
             digitalWrite(gpio, LOW);
             snprintf(resultBuf, bufLen, "{\"result\":\"ok\",\"detail\":\"pulse_sent\"}");
         } else if (strcmp(periph, "echo") == 0) {
@@ -333,7 +308,7 @@ void handlePinCommand(const char* json, char* resultBuf, size_t bufLen) {
             snprintf(resultBuf, bufLen, "{\"result\":\"fail\",\"detail\":\"unknown_peripheral\"}");
         }
     } else if (strcmp(cmd, "save_pin") == 0) {
-        char partial[64];
+        char partial[PIN_COMMAND_PARTIAL_JSON_SIZE];
         if (strcmp(periph, "trig") == 0)
             snprintf(partial, sizeof(partial), "{\"pin_trig\":\"%s\"}", pin);
         else if (strcmp(periph, "echo") == 0)

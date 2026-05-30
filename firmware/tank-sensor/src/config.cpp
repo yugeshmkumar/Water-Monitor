@@ -5,6 +5,15 @@ Config config;
 
 static Preferences _prefs;
 
+// Config::load()
+// ─────────────────────────────────────────────────────────
+// Loads persistent configuration from NVS (Flash) into the
+// runtime config.d struct. All string values are bounded via
+// strlcpy to prevent buffer overflows. Numeric fields use
+// sensible defaults if not yet set.
+//
+// NVS namespace: "config" (read-only mode)
+// Usage: Called during firmware boot in setup()
 void Config::load() {
     _prefs.begin("config", true);
 
@@ -26,6 +35,15 @@ void Config::load() {
     _prefs.end();
 }
 
+// Config::save()
+// ─────────────────────────────────────────────────────────
+// Persists current runtime config.d struct to NVS (Flash).
+// All fields (string and numeric) are written with their current
+// values. This is called whenever config is modified via API, BLE, or
+// JSON update.
+//
+// NVS namespace: "config" (read-write mode)
+// Safety: Flushed to flash on _prefs.end()
 void Config::save() {
     _prefs.begin("config", false);
 
@@ -47,6 +65,21 @@ void Config::save() {
     _prefs.end();
 }
 
+// Config::applyPartialJson()
+// ─────────────────────────────────────────────────────────
+// Applies a partial JSON update to the config struct.
+// Only fields present in the JSON are updated; omitted fields
+// are left unchanged. This pattern is used by REST API and BLE
+// for config updates without requiring the full config object.
+//
+// Returns true if JSON was valid and applied, false on parse error.
+// Automatically calls save() to persist changes to NVS.
+//
+// Usage:
+//   const char* json = "{\"tank_empty_cm\": 150, \"alert_low_pct\": 20}";
+//   if (config.applyPartialJson(json)) {
+//       // Config updated and saved
+//   }
 bool Config::applyPartialJson(const char* json) {
     JsonDocument doc;
     if (deserializeJson(doc, json) != DeserializationError::Ok) return false;
@@ -82,6 +115,14 @@ bool Config::applyPartialJson(const char* json) {
     return true;
 }
 
+// Config::toJson()
+// ─────────────────────────────────────────────────────────
+// Serializes the entire config.d struct into a JsonDocument.
+// This is the canonical representation used by REST API
+// /api/config and BLE AA03 characteristic reads.
+//
+// No validation is performed; caller ensures the doc has
+// sufficient capacity (typically JsonDocument doc with size ~1024).
 void Config::toJson(JsonDocument& out) const {
     out["wifi_ssid"]               = d.wifi_ssid;
     out["wifi_pass"]               = d.wifi_pass;
@@ -105,6 +146,16 @@ void Config::toJson(JsonDocument& out) const {
     out["calibration_confidence"]  = d.calibration_confidence;
 }
 
+// Config::toJsonString()
+// ─────────────────────────────────────────────────────────
+// Convenience function that serializes config to a JSON string
+// in a provided buffer. Bounds-checks against len to prevent
+// buffer overflow.
+//
+// Usage:
+//   char buf[512];
+//   config.toJsonString(buf, sizeof(buf));
+//   // buf now contains the JSON string, null-terminated
 void Config::toJsonString(char* buf, size_t len) const {
     JsonDocument doc;
     toJson(doc);

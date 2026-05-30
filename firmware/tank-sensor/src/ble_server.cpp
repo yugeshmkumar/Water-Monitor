@@ -2,6 +2,7 @@
 #include "config.h"
 #include "sensor.h"
 #include "state.h"
+#include "constants.h"
 #include <ArduinoJson.h>
 #include <WiFi.h>
 
@@ -26,7 +27,7 @@ class CfgReadCallbacks : public NimBLECharacteristicCallbacks {
     void onRead(NimBLECharacteristic* c, NimBLEConnInfo&) override {
         // Build minimal AA03 JSON (avoid 512-byte characteristic limit)
         // Full config available via REST API /api/config
-        char buf[450];
+        char buf[BLE_CONFIG_READ_BUFFER_SIZE];
         snprintf(buf, sizeof(buf),
                  "{\"tank_empty_cm\":%.1f,\"tank_full_cm\":%.1f,"
                  "\"tank_volume_l\":%u,\"node_id\":\"%s\","
@@ -66,7 +67,7 @@ class CmdCallbacks : public NimBLECharacteristicCallbacks {
         std::string val = c->getValue();
         if (val.empty()) return;
 
-        char resultBuf[128];
+        char resultBuf[COMMAND_RESULT_BUFFER_SIZE];
         handlePinCommand(val.c_str(), resultBuf, sizeof(resultBuf));
         bleServer.sendCommandResult(resultBuf);
 
@@ -74,7 +75,7 @@ class CmdCallbacks : public NimBLECharacteristicCallbacks {
         JsonDocument doc;
         if (deserializeJson(doc, val) == DeserializationError::Ok) {
             if (strcmp(doc["cmd"] | "", "reboot") == 0) {
-                delay(500);
+                delay(REBOOT_DELAY_MS);
                 ESP.restart();
             }
         }
@@ -87,7 +88,7 @@ class CmdCallbacks : public NimBLECharacteristicCallbacks {
 
 void BLEServerWrapper::begin() {
     NimBLEDevice::init(config.d.node_id);
-    NimBLEDevice::setMTU(517);  // Enable larger packets for config transfer
+    NimBLEDevice::setMTU(BLE_MTU_SIZE);  // Enable larger packets for config transfer
 
     _server = NimBLEDevice::createServer();
     _server->setCallbacks(new SrvCallbacks());
@@ -135,7 +136,7 @@ void BLEServerWrapper::loop() {
 void BLEServerWrapper::notifyLevel(float distCM, uint8_t levelPct, uint32_t ts) {
     if (!_charAA01 || !_server->getConnectedCount()) return;
 
-    char buf[80];
+    char buf[BLE_LEVEL_NOTIFY_BUFFER_SIZE];
     snprintf(buf, sizeof(buf),
              "{\"level_pct\":%u,\"distance_cm\":%.1f,\"ts\":%lu}",
              levelPct, distCM, (unsigned long)ts);
@@ -147,7 +148,7 @@ void BLEServerWrapper::notifyStatus(bool wifiOk, bool sensorOk,
                                     int8_t rssi, uint16_t queueDepth) {
     if (!_charAA02 || !_server->getConnectedCount()) return;
 
-    char buf[96];
+    char buf[BLE_STATUS_NOTIFY_BUFFER_SIZE];
     snprintf(buf, sizeof(buf),
              "{\"wifi_ok\":%s,\"sensor_ok\":%s,\"rssi\":%d,\"queue_depth\":%u}",
              wifiOk ? "true" : "false",
@@ -167,7 +168,7 @@ void BLEServerWrapper::_updateConfigChar() {
     if (!_charAA03) return;
     // Send minimal config over BLE (rest available via REST API)
     // Avoid 512-byte characteristic size limit by sending only essential fields
-    char buf[300];
+    char buf[BLE_CONFIG_UPDATE_BUFFER_SIZE];
     snprintf(buf, sizeof(buf),
              "{\"tank_empty_cm\":%.1f,\"tank_full_cm\":%.1f,"
              "\"tank_volume_l\":%u,\"node_id\":\"%s\","
