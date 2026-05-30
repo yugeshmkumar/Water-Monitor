@@ -3,6 +3,7 @@
 #include "sensor.h"
 #include "queue_store.h"
 #include "state.h"
+#include "constants.h"
 #include <ArduinoJson.h>
 #include <AsyncJson.h>
 #include <ESPmDNS.h>
@@ -18,7 +19,7 @@ ApiServer apiServer;
 // OTA-from-URL task
 // ─────────────────────────────────────────────────────────────
 
-static char _otaUrl[256] = "";
+static char _otaUrl[OTA_URL_MAX_LEN] = "";
 
 static void otaTask(void* pv) {
     Serial.printf("[OTA] Starting update from: %s\n", _otaUrl);
@@ -46,7 +47,7 @@ void ApiServer::begin() {
 
     // mDNS: {node_id}.local — hostname matches node_id so app can discover by nodeID
     if (MDNS.begin(config.d.node_id)) {
-        MDNS.addService("http", "tcp", 80);
+        MDNS.addService("http", "tcp", HTTP_SERVER_PORT);
         Serial.printf("[API] mDNS: %s.local\n", config.d.node_id);
     }
 
@@ -66,13 +67,13 @@ void ApiServer::broadcastLevel(float distCM, uint8_t levelPct, uint32_t ts) {
     if (_ws.count() == 0) return;
 
     DeviceState snap;
-    if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(50))) {
+    if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(SEMAPHORE_TIMEOUT_MS))) {
         snap = gState;
         xSemaphoreGive(gStateMutex);
     }
 
     // Send complete status matching /api/status format for consistency
-    char buf[256];
+    char buf[HTTP_RESPONSE_BUFFER_SIZE];
     snprintf(buf, sizeof(buf),
              "{\"level_pct\":%u,\"distance_cm\":%.1f,\"ts\":%lu,"
              "\"sensor_ok\":%s,\"wifi_ok\":%s,\"rssi\":%d,"
@@ -105,11 +106,11 @@ void ApiServer::_onWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
         Serial.printf("[WS] Client #%u connected\n", client->id());
         // Send current state immediately on connect (complete status matching /api/status)
         DeviceState snap;
-        if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(50))) {
+        if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(SEMAPHORE_TIMEOUT_MS))) {
             snap = gState;
             xSemaphoreGive(gStateMutex);
         }
-        char buf[256];
+        char buf[HTTP_RESPONSE_BUFFER_SIZE];
         snprintf(buf, sizeof(buf),
                  "{\"level_pct\":%u,\"distance_cm\":%.1f,\"ts\":%lu,"
                  "\"sensor_ok\":%s,\"wifi_ok\":%s,\"rssi\":%d,"
@@ -137,11 +138,11 @@ void ApiServer::_setupRest() {
     // GET /api/status
     _http.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req) {
         DeviceState snap;
-        if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(50))) {
+        if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(SEMAPHORE_TIMEOUT_MS))) {
             snap = gState;
             xSemaphoreGive(gStateMutex);
         }
-        char buf[256];
+        char buf[HTTP_RESPONSE_BUFFER_SIZE];
         snprintf(buf, sizeof(buf),
                  "{\"level_pct\":%u,\"distance_cm\":%.1f,\"ts\":%lu,"
                  "\"sensor_ok\":%s,\"wifi_ok\":%s,\"rssi\":%d,"
@@ -152,7 +153,7 @@ void ApiServer::_setupRest() {
                  snap.wifi_rssi, snap.queue_depth,
                  config.d.firmware_version,
                  WiFi.localIP().toString().c_str());
-        req->send(200, "application/json", buf);
+        req->send(HTTP_STATUS_OK, "application/json", buf);
     });
 
     // GET /api/config — persisted config + runtime network info
@@ -174,7 +175,7 @@ void ApiServer::_setupRest() {
             serializeJson(json, body);
             bool ok = config.applyPartialJson(body.c_str());
             if (ok) resetSensorFilter();   // tank range may have changed
-            req->send(ok ? 200 : 400, "application/json",
+            req->send(ok ? HTTP_STATUS_OK : HTTP_STATUS_BAD_REQUEST, "application/json",
                       ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"parse_error\"}");
         }));
 
@@ -182,7 +183,7 @@ void ApiServer::_setupRest() {
     _http.on("/api/queue/flush", HTTP_POST, [](AsyncWebServerRequest* req) {
         JsonDocument doc;
         JsonArray arr = doc.to<JsonArray>();
-        queueStore.getUnsent(arr, 50);
+        queueStore.getUnsent(arr, QUEUE_FLUSH_MAX_ENTRIES);
         String out;
         serializeJson(doc, out);
         req->send(200, "application/json", out);
@@ -195,7 +196,7 @@ void ApiServer::_setupRest() {
         [](AsyncWebServerRequest* req, JsonVariant& json) {
             uint32_t seq = json["seq_up_to"] | 0u;
             if (seq == 0) {
-                req->send(400, "application/json", "{\"ok\":false,\"error\":\"missing seq_up_to\"}");
+                req->send(HTTP_STATUS_BAD_REQUEST, "application/json", "{\"ok\":false,\"error\":\"missing seq_up_to\"}");
                 return;
             }
             queueStore.setPendingAck(seq);
@@ -207,25 +208,25 @@ void ApiServer::_setupRest() {
         [](AsyncWebServerRequest* req, JsonVariant& json) {
             String body;
             serializeJson(json, body);
-            char resultBuf[128];
+            char resultBuf[COMMAND_RESULT_BUFFER_SIZE];
             handlePinCommand(body.c_str(), resultBuf, sizeof(resultBuf));
 
             // Deferred reboot: send response first
             bool isReboot = (strcmp(json["cmd"] | "", "reboot") == 0);
             req->send(200, "application/json", resultBuf);
             if (isReboot) {
-                delay(500);
+                delay(REBOOT_DELAY_MS);
                 ESP.restart();
             }
         }));
 
     // GET /api/ota/check — returns current version; app provides update URL
     _http.on("/api/ota/check", HTTP_GET, [](AsyncWebServerRequest* req) {
-        char buf[128];
+        char buf[VERSION_BUFFER_SIZE];
         snprintf(buf, sizeof(buf),
                  "{\"current\":\"%s\",\"node_id\":\"%s\"}",
                  config.d.firmware_version, config.d.node_id);
-        req->send(200, "application/json", buf);
+        req->send(HTTP_STATUS_OK, "application/json", buf);
     });
 
     // POST /api/ota/start — {"url":"http://..."}
@@ -233,16 +234,16 @@ void ApiServer::_setupRest() {
         [](AsyncWebServerRequest* req, JsonVariant& json) {
             const char* url = json["url"] | "";
             if (!url || strlen(url) == 0) {
-                req->send(400, "application/json", "{\"ok\":false,\"error\":\"missing url\"}");
+                req->send(HTTP_STATUS_BAD_REQUEST, "application/json", "{\"ok\":false,\"error\":\"missing url\"}");
                 return;
             }
             strlcpy(_otaUrl, url, sizeof(_otaUrl));
-            req->send(202, "application/json", "{\"ok\":true,\"status\":\"update_started\"}");
-            xTaskCreate(otaTask, "ota", 8192, NULL, 5, NULL);
+            req->send(HTTP_STATUS_ACCEPTED, "application/json", "{\"ok\":true,\"status\":\"update_started\"}");
+            xTaskCreate(otaTask, "ota", OTA_TASK_STACK_SIZE, NULL, OTA_TASK_PRIORITY, NULL);
         }));
 
     // Catch-all 404
     _http.onNotFound([](AsyncWebServerRequest* req) {
-        req->send(404, "application/json", "{\"error\":\"not_found\"}");
+        req->send(HTTP_STATUS_NOT_FOUND, "application/json", "{\"error\":\"not_found\"}");
     });
 }
