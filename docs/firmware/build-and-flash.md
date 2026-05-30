@@ -1,6 +1,6 @@
 # Firmware — Build and Flash Guide
 
-Target: **Node A** (`firmware/node_a_sensor/`) on Seeed XIAO ESP32-C6
+Target: **Node A** (`firmware/tank-sensor/`) on Seeed XIAO ESP32-C6
 
 ---
 
@@ -20,7 +20,7 @@ PlatformIO will automatically download the pioarduino platform and all library d
 ## Build
 
 1. Open VS Code
-2. **File → Open Folder** → select `firmware/node_a_sensor/`
+2. **File → Open Folder** → select `firmware/tank-sensor/`
 3. PlatformIO will detect `platformio.ini` and configure the project
 4. Click the **Build** button (✓ in the bottom toolbar) or run:
    ```
@@ -99,7 +99,7 @@ Send to AA04:
 ### Browser (ElegantOTA)
 1. Connect to the same WiFi network as the device
 2. Open `http://waterlevel-a.local/update`
-3. Select the compiled `.bin` file from `.pio/build/node_a_sensor/firmware.bin`
+3. Select the compiled `.bin` file from `.pio/build/tank-sensor/firmware.bin`
 4. Click **Update** — device reboots automatically
 
 ### From iOS App

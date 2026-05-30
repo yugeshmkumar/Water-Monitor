@@ -3,7 +3,7 @@
     "allow": [
       "Bash(find ~/.platformio -name \"Arduino.h\" 2>/dev/null | head -5)",
       "Read(//Users/yugeshmluv/**)",
-      "Bash(mkdir -p /Users/yugeshmluv/Work/Projects/code/water-monitor/firmware/node_a_sensor/.vscode)",
+      "Bash(mkdir -p /Users/yugeshmluv/Work/Projects/code/water-monitor/firmware/tank-sensor/.vscode)",
       "Bash(rm -rf .pio/libdeps)",
       "Bash(~/.platformio/penv/bin/pio run *)",
       "Bash(curl -s --max-time 5 http://192.168.1.168/api/status)",
@@ -16,7 +16,7 @@
       "Bash(nc -w 5 192.168.1.168 80)"
     ],
     "additionalDirectories": [
-      "/Users/yugeshmluv/Work/Projects/code/water-monitor/firmware/node_a_sensor"
+      "/Users/yugeshmluv/Work/Projects/code/water-monitor/firmware/tank-sensor"
     ]
   }
 }
