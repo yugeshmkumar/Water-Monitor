@@ -13,8 +13,9 @@ struct DashboardView: View {
             ScrollView {
                 if let vm {
                     VStack(spacing: 24) {
+                        deviceHeader
                         connectionBadge(vm: vm)
-                        testModeToggle
+                        testModeSection
                         levelGauge(vm: vm)
                         statsGrid(vm: vm)
                     }
@@ -50,23 +51,85 @@ struct DashboardView: View {
 
     // MARK: - Sub-views
     
-    private var testModeToggle: some View {
+    private var deviceHeader: some View {
         HStack {
-            Image(systemName: cm.testMode ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                .foregroundStyle(cm.testMode ? .green : .secondary)
-            Toggle("Test Mode (3s polling)", isOn: Binding(
-                get: { cm.testMode },
-                set: { newValue in
-                    Task {
-                        await cm.setTestMode(newValue)
+            Text(getDeviceDisplayName(nodeID: cm.config?.nodeID ?? ""))
+                .font(.title2.bold())
+            
+            Spacer()
+            
+            // ✅ Prominent test mode button with clear visual distinction
+            Button(action: {
+                let currentMode = cm.config?.testingMode ?? false
+                print("[Dashboard] Test mode toggle: \(!currentMode)")
+                Task {
+                    if let nodeID = cm.config?.nodeID {
+                        await cm.setTestMode(!currentMode, for: nodeID)
+                        try? await Task.sleep(for: .milliseconds(500))
+                        print("[Dashboard] Test mode set complete")
                     }
                 }
-            ))
-            .toggleStyle(.switch)
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: cm.config?.testingMode == true ? "flame.fill" : "flame")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("TEST")
+                        .font(.system(size: 12, weight: .bold))
+                        .tracking(1)
+                }
+                .foregroundStyle(cm.config?.testingMode == true ? .white : .orange)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(cm.config?.testingMode == true ? Color.orange : Color.orange.opacity(0.15))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.orange, lineWidth: cm.config?.testingMode == true ? 0 : 1.5)
+                )
+            }
+            .buttonStyle(.plain)
         }
-        .font(.subheadline)
+        .padding(.horizontal, 4)
+    }
+    
+    private var testModeSection: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Image(systemName: cm.config?.testingMode == true ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                    .foregroundStyle(cm.config?.testingMode == true ? .orange : .secondary)
+                Text("Test Mode Polling")
+                    .font(.subheadline.bold())
+                Spacer()
+            }
+            
+            HStack {
+                Text("Interval:")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                
+                Slider(value: Binding(
+                    get: { Double(cm.config?.testPollIntervalS ?? 3) },
+                    set: { newValue in
+                        Task {
+                            if let nodeID = cm.config?.nodeID {
+                                await cm.writeConfig(["test_poll_interval_s": Int(newValue)], for: nodeID)
+                            }
+                        }
+                    }
+                ), in: 1...10, step: 1)
+                .disabled(cm.config?.testingMode != true)
+                
+                Text("\(cm.config?.testPollIntervalS ?? 3)s")
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 30, alignment: .trailing)
+                    .foregroundStyle(cm.config?.testingMode == true ? .primary : .secondary)
+            }
+        }
         .padding()
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .opacity(cm.config?.testingMode == true ? 1.0 : 0.5)
     }
 
     private func connectionBadge(vm: DashboardVM) -> some View {

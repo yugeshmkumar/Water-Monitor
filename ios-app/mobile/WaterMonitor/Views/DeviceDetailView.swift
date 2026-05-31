@@ -10,6 +10,14 @@ struct DeviceDetailView: View {
     @State private var testModeLoading = false
     @State private var showCalibration = false
     @State private var showHealthCheck = false
+    
+    // ✅ Local state for test mode controls
+    @State private var localTestMode: Bool = false
+    @State private var localTestInterval: Int = 3
+    @State private var sliderDebounceTask: Task<Void, Never>?
+    
+    // ✅ Live mode toggle (UI-only, forces real-time updates)
+    @State private var liveMode: Bool = false
 
     // ✅ Check if THIS specific device is connected
     private var isConnected: Bool {
@@ -50,6 +58,49 @@ struct DeviceDetailView: View {
         .navigationTitle(device.displayName)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
+            // ✅ TEST MODE Toggle (top right) - prominent and clear
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    liveMode.toggle()
+                    Task {
+                        if liveMode {
+                            // Enable test mode with current interval
+                            await cm.writeConfig([
+                                "testing_mode": true,
+                                "test_poll_interval_s": localTestInterval
+                            ], for: device.nodeID)
+                        } else {
+                            // Disable test mode
+                            await cm.writeConfig([
+                                "testing_mode": false
+                            ], for: device.nodeID)
+                        }
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: liveMode ? "flame.fill" : "flame")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("TEST")
+                            .font(.system(size: 11, weight: .bold))
+                            .tracking(0.5)
+                    }
+                    .foregroundStyle(liveMode ? .white : .orange)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(liveMode ? Color.orange : Color.orange.opacity(0.15))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(Color.orange, lineWidth: liveMode ? 0 : 1.5)
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(!isConnected)
+                .opacity(isConnected ? 1.0 : 0.5)
+            }
+            
             ToolbarItem(placement: .primaryAction) {
                 NavigationLink(destination: DeviceConfigView(device: device)) {
                     Image(systemName: "gearshape")
@@ -62,7 +113,7 @@ struct DeviceDetailView: View {
             }
         }
         .sheet(isPresented: $showCalibration) {
-            TankCalibrationView()
+            TankCalibrationView(device: device)
         }
         .sheet(isPresented: $showHealthCheck) {
             DeviceHealthCheckView(device: device)
@@ -169,47 +220,59 @@ struct DeviceDetailView: View {
                 .font(.headline)
 
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Image(systemName: cm.testMode
-                          ? "antenna.radiowaves.left.and.right"
-                          : "antenna.radiowaves.left.and.right.slash")
-                        .foregroundStyle(cm.testMode ? .green : .secondary)
-
-                    Toggle("Test Mode", isOn: Binding(
-                        get: { cm.testMode },
-                        set: { newValue in
-                            testModeLoading = true
-                            Task {
-                                await cm.setTestMode(newValue)
-                                testModeLoading = false
-                            }
-                        }
-                    ))
-                    .disabled(testModeLoading || !isConnected)  // ✅ Use isConnected
-
-                    if testModeLoading {
-                        ProgressView()
-                            .scaleEffect(0.7)
+                // ✅ Test Mode Polling Interval (always visible)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: liveMode ? "flame.fill" : "flame")
+                            .foregroundStyle(liveMode ? .orange : .secondary)
+                        Text("Test Mode Polling")
+                            .font(.subheadline)
+                        Spacer()
+                        Text(liveMode ? "ACTIVE" : "OFF")
+                            .font(.caption.bold())
+                            .foregroundStyle(liveMode ? .white : .secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(liveMode ? Color.orange : Color.gray.opacity(0.2), in: Capsule())
                     }
-                }
-                .font(.subheadline)
-
-                if cm.testMode, let testInterval = deviceConfig?.testPollIntervalS {  // ✅ Use deviceConfig
+                    
                     HStack(spacing: 12) {
-                        Text("Test Interval")
+                        Text("Interval")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Slider(value: Binding(
-                            get: { Double(testInterval) },
+                            get: { Double(localTestInterval) },
                             set: { newVal in
-                                Task {
-                                    await cm.writeConfig(["test_poll_interval_s": Int(newVal)])
+                                localTestInterval = Int(newVal)
+                                
+                                // Only save if live mode is enabled
+                                guard liveMode else { return }
+                                
+                                // Debounce: wait 500ms after user stops dragging
+                                sliderDebounceTask?.cancel()
+                                sliderDebounceTask = Task {
+                                    try? await Task.sleep(for: .milliseconds(500))
+                                    guard !Task.isCancelled else { return }
+                                    // Enable test mode on device with this interval
+                                    await cm.writeConfig([
+                                        "testing_mode": true,
+                                        "test_poll_interval_s": Int(newVal)
+                                    ], for: device.nodeID)
                                 }
                             }
-                        ), in: 1...10, step: 1)
-                        Text("\(testInterval)s")
+                        ), in: 1...15, step: 1)
+                        .disabled(!liveMode)  // ✅ Disabled when test mode is OFF
+                        
+                        Text("\(localTestInterval)s")
                             .font(.caption.monospacedDigit())
-                            .frame(width: 30, alignment: .trailing)
+                            .foregroundStyle(liveMode ? .primary : .secondary)
+                            .frame(width: 35, alignment: .trailing)
+                    }
+                    
+                    if !liveMode {
+                        Text("Tap TEST button in top right to enable fast polling")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
                     }
                 }
             }
@@ -217,7 +280,7 @@ struct DeviceDetailView: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(cm.testMode ? Color.green.opacity(0.5) : Color.clear, lineWidth: 1.5)
+                    .stroke(liveMode ? Color.orange.opacity(0.5) : Color.clear, lineWidth: 1.5)
             )
 
             HStack(spacing: 12) {

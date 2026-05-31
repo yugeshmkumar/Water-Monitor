@@ -3,6 +3,8 @@ import SwiftUI
 struct TankCalibrationView: View {
     @Environment(ConnectionManager.self) private var cm
     @Environment(\.dismiss) private var dismiss
+    
+    let device: SavedDevice?  // ✅ Optional device parameter (nil for legacy single-device mode)
 
     @State private var mode: CalibrationMode = .selection
     @State private var currentReading: Double = 0
@@ -15,6 +17,16 @@ struct TankCalibrationView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var lastReadingTime: Date?
+    @State private var calculatedFullCM: Double?  // ✅ Store calculated values to display
+    @State private var calculatedEmptyCM: Double?
+    
+    // ✅ Get status for THIS device
+    private var deviceStatus: DeviceStatus? {
+        if let device = device {
+            return cm.getStatus(for: device.nodeID)
+        }
+        return cm.displayStatus  // Legacy fallback
+    }
 
     enum CalibrationMode {
         case selection, quick, auto, complete
@@ -343,11 +355,20 @@ struct TankCalibrationView: View {
             .background(.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
 
             VStack(alignment: .leading, spacing: 12) {
-                resultRow("Full Point", recordedPoints.last?.distance ?? 0)
+                Text("Calibration Points Used:").font(.caption).foregroundStyle(.secondary)
+                ForEach(recordedPoints.indices, id: \.self) { i in
+                    Text("Point \(i+1): \(String(format: "%.1f cm @ %d%%", recordedPoints[i].distance, recordedPoints[i].percent))")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                
+                Divider().padding(.vertical, 4)
+                
+                Text("Calculated Tank Boundaries:").font(.caption.bold())
+                resultRow("Full Point (100%)", calculatedFullCM ?? 0)
                 Divider()
-                resultRow("Empty Point", recordedPoints.first?.distance ?? 0)
+                resultRow("Empty Point (0%)", calculatedEmptyCM ?? 0)
                 Divider()
-                resultRow("Tank Range", (recordedPoints.last?.distance ?? 0) - (recordedPoints.first?.distance ?? 0))
+                resultRow("Tank Range", (calculatedEmptyCM ?? 0) - (calculatedFullCM ?? 0))
             }
             .padding()
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -474,7 +495,7 @@ struct TankCalibrationView: View {
     private func startLiveReadings() {
         Task {
             while !Task.isCancelled {
-                if let status = cm.displayStatus {
+                if let status = deviceStatus {  // ✅ Use device-specific status
                     await MainActor.run {
                         currentReading = status.distanceCM
                         lastReadingTime = Date()
@@ -524,7 +545,11 @@ struct TankCalibrationView: View {
     private func startAutoCalibration() {
         isSaving = true
         Task {
-            await cm.writeConfig(["auto_calibration_enabled": true])
+            if let device = device {
+                await cm.writeConfig(["auto_calibration_enabled": true], for: device.nodeID)
+            } else {
+                await cm.writeConfig(["auto_calibration_enabled": true])  // Legacy
+            }
             await MainActor.run { isSaving = false; mode = .auto }
         }
     }
@@ -534,21 +559,64 @@ struct TankCalibrationView: View {
         errorMessage = nil
 
         if mode == .quick && recordedPoints.count == 2 {
-            let dist1 = recordedPoints[0].distance
-            let dist2 = recordedPoints[1].distance
-            let pct1 = Double(recordedPoints[0].percent)
-            let pct2 = Double(recordedPoints[1].percent)
+            // ✅ Sort points: smaller distance = more full (closer to sensor)
+            let sortedPoints = recordedPoints.sorted { $0.distance < $1.distance }
+            
+            let dist1 = sortedPoints[0].distance  // Smaller distance (fuller)
+            let dist2 = sortedPoints[1].distance  // Larger distance (emptier)
+            let pct1 = Double(sortedPoints[0].percent)  // Higher percentage
+            let pct2 = Double(sortedPoints[1].percent)  // Lower percentage
+            
+            print("[Calibration] Point 1: \(dist1)cm = \(pct1)%")
+            print("[Calibration] Point 2: \(dist2)cm = \(pct2)%")
 
-            // Two-point calibration using user-provided percentages
-            let range = 100.0 * (dist1 - dist2) / (pct1 - pct2)
-            let fullCM = dist1 - (pct1 / 100.0) * range
-            let emptyCM = fullCM + range
+            // ✅ Correct linear interpolation formula
+            // percent = 100 * (tank_empty_cm - distance) / (tank_empty_cm - tank_full_cm)
+            // 
+            // From two points:
+            //   pct1 = 100 * (empty - dist1) / (empty - full)
+            //   pct2 = 100 * (empty - dist2) / (empty - full)
+            //
+            // Solving:
+            //   pct1/100 * (empty - full) = empty - dist1
+            //   pct2/100 * (empty - full) = empty - dist2
+            //
+            // Subtracting: (pct1 - pct2)/100 * (empty - full) = dist2 - dist1
+            //              (empty - full) = 100 * (dist2 - dist1) / (pct1 - pct2)
+            //
+            // From first equation: empty = dist1 + pct1/100 * (empty - full)
+            
+            let range = 100.0 * (dist2 - dist1) / (pct1 - pct2)
+            let emptyCM = dist1 + (pct1 / 100.0) * range
+            let fullCM = emptyCM - range
+            
+            // ✅ Store for display
+            calculatedEmptyCM = emptyCM
+            calculatedFullCM = fullCM
+            
+            print("[Calibration] Calculated: tank_full_cm=\(fullCM), tank_empty_cm=\(emptyCM)")
+            print("[Calibration] Range: \(range) cm")
+
+            // Validation
+            guard abs(emptyCM - fullCM) > 5 else {
+                print("[Calibration] ERROR: Invalid range (too small)")
+                errorMessage = "Invalid calibration: points too close"
+                isSaving = false
+                return
+            }
 
             Task {
-                await cm.writeConfig([
-                    "tank_empty_cm": emptyCM,
-                    "tank_full_cm": fullCM
-                ])
+                if let device = device {
+                    await cm.writeConfig([
+                        "tank_empty_cm": emptyCM,
+                        "tank_full_cm": fullCM
+                    ], for: device.nodeID)
+                } else {
+                    await cm.writeConfig([
+                        "tank_empty_cm": emptyCM,
+                        "tank_full_cm": fullCM
+                    ])  // Legacy
+                }
                 await MainActor.run {
                     mode = .complete
                     isSaving = false
@@ -562,6 +630,6 @@ struct TankCalibrationView: View {
 }
 
 #Preview {
-    TankCalibrationView()
+    TankCalibrationView(device: nil)
         .environment(ConnectionManager())
 }

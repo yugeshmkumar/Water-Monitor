@@ -66,10 +66,17 @@ static float takeOnePulse() {
         return -1.0f;
     }
 
+    // Disable interrupts during pulse timing to prevent BLE/WiFi from preempting
+    // This is critical for ultrasonic sensors on ESP32 with radio tasks
+    noInterrupts();
+
     digitalWrite(trigPin, LOW);  delayMicroseconds(4);
     digitalWrite(trigPin, HIGH); delayMicroseconds(TRIG_PULSE_US);
     digitalWrite(trigPin, LOW);
     long dur = pulseIn(echoPin, HIGH, ECHO_TIMEOUT_US);
+
+    interrupts();
+
     if (dur <= 0) return -1.0f;
     return (dur * SOUND_SPEED_CM_US) / 2.0f;
 }
@@ -246,6 +253,11 @@ float readDistanceCM() {
 
     float median = sortedMedian(buf, valid);
 
+    // In test mode: return raw median for true real-time readings without filtering delays
+    if (config.d.testing_mode) {
+        return median;
+    }
+
     // Step 2: Kalman filter — per-reading noise suppression + self-healing
     float kfEst = kalmanUpdate(median);
 
@@ -266,7 +278,9 @@ void resetSensorFilter() {
 }
 
 float computeLevelPct(float distCM, float emptyDist, float fullDist) {
-    float pct = 100.0f * (emptyDist - distCM) / (emptyDist - fullDist);
+    float range = emptyDist - fullDist;
+    if (fabsf(range) < 1.0f) return -1.0f;  // Invalid calibration, return error
+    float pct = 100.0f * (emptyDist - distCM) / range;
     return constrain(pct, 0.0f, 100.0f);
 }
 

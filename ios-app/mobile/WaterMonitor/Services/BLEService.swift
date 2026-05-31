@@ -74,6 +74,17 @@ final class BLEService: NSObject {
         guard let char = charMap[GATT.cfgWrite],
               let data = try? JSONSerialization.data(withJSONObject: patch) else { return }
         peripheral?.writeValue(data, for: char, type: .withResponse)
+        
+        // After writing config, request it back to update the UI
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            print("[BLE] Reading config after write...")
+            self?.readConfig()
+        }
+    }
+
+    func readConfig() {
+        guard let char = charMap[GATT.cfgRead] else { return }
+        peripheral?.readValue(for: char)
     }
 
     func sendCommand(_ cmd: [String: Any]) {

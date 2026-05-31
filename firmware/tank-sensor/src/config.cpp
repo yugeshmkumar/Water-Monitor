@@ -22,6 +22,8 @@ void Config::load() {
     d.alert_low_pct   = _prefs.getUInt ("alert_low",    15);
     d.alert_high_pct  = _prefs.getUInt ("alert_high",   95);
     d.poll_interval_s = _prefs.getUInt ("poll_int",     10);
+    d.testing_mode    = _prefs.getBool ("testing_mode", false);
+    d.test_poll_interval_s = _prefs.getUChar("test_poll_int", 3);
 
     _prefs.end();
 }
@@ -43,6 +45,8 @@ void Config::save() {
     _prefs.putUInt ("alert_low",  d.alert_low_pct);
     _prefs.putUInt ("alert_high", d.alert_high_pct);
     _prefs.putUInt ("poll_int",   d.poll_interval_s);
+    _prefs.putBool ("testing_mode", d.testing_mode);
+    _prefs.putUChar("test_poll_int", d.test_poll_interval_s);
 
     _prefs.end();
 }
@@ -64,8 +68,21 @@ bool Config::applyPartialJson(const char* json) {
     if (!doc["mqtt_broker_ip"].isNull())
         strlcpy(d.mqtt_broker_ip, doc["mqtt_broker_ip"].as<const char*>(), sizeof(d.mqtt_broker_ip));
 
-    if (!doc["tank_empty_cm"].isNull())        d.tank_empty_cm        = doc["tank_empty_cm"].as<float>();
-    if (!doc["tank_full_cm"].isNull())         d.tank_full_cm         = doc["tank_full_cm"].as<float>();
+    bool calibrationUpdated = false;
+    if (!doc["tank_empty_cm"].isNull()) {
+        d.tank_empty_cm = doc["tank_empty_cm"].as<float>();
+        calibrationUpdated = true;
+    }
+    if (!doc["tank_full_cm"].isNull()) {
+        d.tank_full_cm = doc["tank_full_cm"].as<float>();
+        calibrationUpdated = true;
+    }
+
+    // Validate only if calibration was being updated
+    if (calibrationUpdated && fabsf(d.tank_empty_cm - d.tank_full_cm) < 1.0f) {
+        Serial.println("[Config] WARNING: Invalid calibration (empty≈full). Rejecting calibration update.");
+        return false;
+    }
     if (!doc["tank_volume_l"].isNull())        d.tank_volume_l        = doc["tank_volume_l"].as<uint32_t>();
     if (!doc["alert_low_pct"].isNull())        d.alert_low_pct        = doc["alert_low_pct"].as<uint8_t>();
     if (!doc["alert_high_pct"].isNull())       d.alert_high_pct       = doc["alert_high_pct"].as<uint8_t>();

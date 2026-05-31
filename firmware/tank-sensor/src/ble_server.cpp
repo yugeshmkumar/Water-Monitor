@@ -26,17 +26,18 @@ class CfgReadCallbacks : public NimBLECharacteristicCallbacks {
     void onRead(NimBLECharacteristic* c, NimBLEConnInfo&) override {
         // Build minimal AA03 JSON (avoid 512-byte characteristic limit)
         // Full config available via REST API /api/config
-        char buf[450];
+        char buf[480];
         snprintf(buf, sizeof(buf),
                  "{\"tank_empty_cm\":%.1f,\"tank_full_cm\":%.1f,"
                  "\"tank_volume_l\":%u,\"node_id\":\"%s\","
-                 "\"poll_interval_s\":%u,\"testing_mode\":%s,"
+                 "\"poll_interval_s\":%u,\"testing_mode\":%s,\"test_poll_interval_s\":%u,"
                  "\"ip\":\"%s\",\"mac\":\"%s\",\"hostname\":\"%s.local\","
                  "\"firmware_version\":\"%s\"}",
                  config.d.tank_empty_cm, config.d.tank_full_cm,
                  config.d.tank_volume_l, config.d.node_id,
-                 config.d.testing_mode ? config.d.test_poll_interval_s : config.d.poll_interval_s,
+                 config.d.poll_interval_s,
                  config.d.testing_mode ? "true" : "false",
+                 config.d.test_poll_interval_s,
                  WiFi.localIP().toString().c_str(),
                  WiFi.macAddress().c_str(),
                  config.d.node_id,
@@ -167,14 +168,15 @@ void BLEServerWrapper::_updateConfigChar() {
     if (!_charAA03) return;
     // Send minimal config over BLE (rest available via REST API)
     // Avoid 512-byte characteristic size limit by sending only essential fields
-    char buf[300];
+    char buf[320];
     snprintf(buf, sizeof(buf),
              "{\"tank_empty_cm\":%.1f,\"tank_full_cm\":%.1f,"
              "\"tank_volume_l\":%u,\"node_id\":\"%s\","
-             "\"poll_interval_s\":%u,\"testing_mode\":%s}",
+             "\"poll_interval_s\":%u,\"testing_mode\":%s,\"test_poll_interval_s\":%u}",
              config.d.tank_empty_cm, config.d.tank_full_cm,
              config.d.tank_volume_l, config.d.node_id,
-             config.d.testing_mode ? config.d.test_poll_interval_s : config.d.poll_interval_s,
-             config.d.testing_mode ? "true" : "false");
+             config.d.poll_interval_s,
+             config.d.testing_mode ? "true" : "false",
+             config.d.test_poll_interval_s);
     _charAA03->setValue(buf);
 }

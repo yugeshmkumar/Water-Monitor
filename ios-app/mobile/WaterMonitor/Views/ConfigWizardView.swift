@@ -100,7 +100,7 @@ struct ConfigWizardView: View {
             }
         }
         .sheet(isPresented: $showCalibration) {
-            TankCalibrationView()
+            TankCalibrationView(device: nil)  // ✅ Legacy mode (single device)
                 .onDisappear {
                     // Refresh edited config from device after calibration completes
                     if let cfg = cm.config { edited = cfg }
@@ -153,6 +153,18 @@ struct ConfigWizardView: View {
 
     private var tankForm: some View {
         Form {
+            Section {
+                HStack {
+                    Text("Tank 1")
+                        .font(.title2.bold())
+                    Spacer()
+                    Toggle("Test Mode", isOn: $edited.testingMode)
+                        .toggleStyle(.button)
+                        .tint(.orange)
+                }
+                .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+            }
+            
             Section("Tank Dimensions") {
                 VStack(spacing: 12) {
                     HStack {
@@ -227,22 +239,20 @@ struct ConfigWizardView: View {
                 }
                 .help("Range: 15 seconds to 15 minutes")
 
-                Toggle("Test Mode", isOn: $edited.testingMode)
-
-                if edited.testingMode {
-                    LabeledContent("Test polling interval") {
-                        HStack {
-                            Slider(value: Binding(
-                                get: { Double(edited.testPollIntervalS) },
-                                set: { edited.testPollIntervalS = Int($0) }
-                            ), in: 1...10, step: 1)
-                            Text("\(edited.testPollIntervalS)s")
-                                .font(.caption.monospacedDigit())
-                                .frame(width: 30, alignment: .trailing)
-                        }
+                LabeledContent("Test polling interval") {
+                    HStack {
+                        Slider(value: Binding(
+                            get: { Double(edited.testPollIntervalS) },
+                            set: { edited.testPollIntervalS = Int($0) }
+                        ), in: 1...10, step: 1)
+                        .disabled(!edited.testingMode)
+                        Text("\(edited.testPollIntervalS)s")
+                            .font(.caption.monospacedDigit())
+                            .frame(width: 30, alignment: .trailing)
                     }
-                    .help("Range: 1 second to 10 seconds")
                 }
+                .help("Range: 1 second to 10 seconds. Enable Test Mode to adjust.")
+                .opacity(edited.testingMode ? 1.0 : 0.5)
             }
         }
     }

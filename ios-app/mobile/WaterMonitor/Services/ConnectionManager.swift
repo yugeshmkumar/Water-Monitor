@@ -28,7 +28,26 @@ final class ConnectionManager {
     private var dataCache: DataCache?
     private var deviceBootTime: Date?  // Used to reconstruct timestamps from queued readings
     private var lastWiFiAttempt: [String: Date] = [:]  // Track recent WiFi attempts by host
+    
+    // ✅ Best Practice: Adaptive polling for offline devices (like Home Assistant, Nest, etc.)
+    private var deviceHealthState: [String: DeviceHealth] = [:]  // host -> health tracking
+    private var healthCheckTasks: [String: Task<Void, Never>] = [:]  // Background health monitors
+    
     var onDeviceActivity: ((String) -> Void)?  // Called when device sends a reading (nodeID)
+    
+    // Health tracking for each device
+    private struct DeviceHealth {
+        var consecutiveFailures: Int = 0
+        var lastSuccessfulContact: Date?
+        var isHealthy: Bool = true
+        var currentPollInterval: TimeInterval = 15  // Start with 15s
+        
+        // Adaptive polling intervals based on health
+        static let healthyInterval: TimeInterval = 15      // When device is responsive
+        static let degradedInterval: TimeInterval = 60     // After 1-2 failures
+        static let unhealthyInterval: TimeInterval = 300   // After 3+ failures (5 min)
+        static let maxFailuresBeforeSlow: Int = 3
+    }
 
     // Legacy properties - return first connected device for backwards compatibility
     var status: DeviceStatus? { 
@@ -59,6 +78,12 @@ final class ConnectionManager {
         let config = wifiConnections[nodeID]?.deviceConfig
         _ = lastUpdateTrigger
         return config
+    }
+    
+    // ✅ NEW: Get health status for a device
+    func getDeviceHealth(for host: String) -> (isHealthy: Bool, pollInterval: TimeInterval, failures: Int)? {
+        guard let health = deviceHealthState[host] else { return nil }
+        return (health.isHealthy, health.currentPollInterval, health.consecutiveFailures)
     }
     
     // NEW: Check if a specific device is connected
@@ -203,22 +228,23 @@ final class ConnectionManager {
     func tryWiFi(host: String, nodeID: String? = nil) {
         // Skip invalid/placeholder IPs
         guard !host.isEmpty && host != "0.0.0.0" && !host.hasPrefix("0.0.0.0:") else {
-            print("[ConnectionManager] Skipping WiFi \(host) - invalid IP")
             return
         }
-
-        // Skip if we tried this host recently (15s for IPs, 30s for hostnames)
-        let minInterval: TimeInterval = host.contains(".") && !host.contains(":") ? 15 : 30
+        
+        // ✅ Best Practice: Adaptive throttling based on device health
+        let health = deviceHealthState[host] ?? DeviceHealth()
+        let minInterval = health.currentPollInterval
+        
         if let lastAttempt = lastWiFiAttempt[host],
            Date().timeIntervalSince(lastAttempt) < minInterval {
-            print("[ConnectionManager] Skipping WiFi \(host) - tried recently")
+            // Don't spam - respect the adaptive interval
             return
         }
         
         lastWiFiAttempt[host] = Date()
         
         Task {
-            print("[ConnectionManager] Trying WiFi: \(host)")
+            print("[ConnectionManager] Trying WiFi: \(host) (poll interval: \(Int(health.currentPollInterval))s)")
             
             // Create or get WiFi service for this connection
             let wifiService: WiFiService
@@ -233,8 +259,12 @@ final class ConnectionManager {
             // Test connection
             guard (try? await wifiService.fetchStatus()) != nil else {
                 print("[ConnectionManager] WiFi failed: \(host)")
+                self.recordDeviceFailure(for: host)
                 return
             }
+            
+            // ✅ Success - mark device as healthy
+            self.recordDeviceSuccess(for: host)
             
             print("[ConnectionManager] WiFi connected: \(host)")
             connectedWiFiHost = host
@@ -298,6 +328,27 @@ final class ConnectionManager {
         ble.startScan()
     }
     
+    // ✅ NEW: Write config to a specific device
+    func writeConfig(_ patch: [String: Any], for nodeID: String) async {
+        saveStatus = nil
+        
+        // Try to write to the specific device's WiFi connection
+        if let wifiService = wifiConnections[nodeID] {
+            do {
+                try await wifiService.patchConfig(patch)
+                saveStatus = "✓ Settings saved"
+                print("[ConnectionManager] Config saved to \(nodeID): \(patch)")
+            } catch {
+                saveStatus = "✗ Failed to save"
+                print("[ConnectionManager] Failed to save config to \(nodeID): \(error)")
+            }
+        } else {
+            // Fall back to legacy writeConfig if device not found
+            await writeConfig(patch)
+        }
+    }
+    
+    // Legacy writeConfig (kept for backward compatibility)
     func writeConfig(_ patch: [String: Any]) async {
         saveStatus = nil
         switch transport {
@@ -319,10 +370,23 @@ final class ConnectionManager {
         }
     }
     
+    // ✅ NEW: Set test mode for a specific device
+    func setTestMode(_ enabled: Bool, for nodeID: String) async {
+        testMode = enabled
+        dataCache?.testModeEnabled = enabled
+        // Always send both testing_mode AND test_poll_interval_s together
+        let interval = config?.testPollIntervalS ?? 3
+        print("[ConnectionManager] Setting test mode: enabled=\(enabled), interval=\(interval)s")
+        await writeConfig(["testing_mode": enabled, "test_poll_interval_s": interval], for: nodeID)
+    }
+    
+    // Legacy setTestMode (kept for backward compatibility)
     func setTestMode(_ enabled: Bool) async {
         testMode = enabled
         dataCache?.testModeEnabled = enabled
-        await writeConfig(["testing_mode": enabled])
+        let interval = config?.testPollIntervalS ?? 3
+        print("[ConnectionManager] Setting test mode (legacy): enabled=\(enabled), interval=\(interval)s")
+        await writeConfig(["testing_mode": enabled, "test_poll_interval_s": interval])
     }
 
     func sendCommand(_ cmd: [String: Any]) {
@@ -347,6 +411,79 @@ final class ConnectionManager {
         case .none:
             break
         }
+    }
+    
+    // MARK: - Device Health Tracking (Adaptive Polling)
+    
+    /// ✅ Best Practice: Record device success and restore healthy polling
+    @MainActor
+    private func recordDeviceSuccess(for host: String) {
+        var health = deviceHealthState[host] ?? DeviceHealth()
+        health.consecutiveFailures = 0
+        health.lastSuccessfulContact = Date()
+        health.isHealthy = true
+        health.currentPollInterval = DeviceHealth.healthyInterval
+        deviceHealthState[host] = health
+        
+        print("[ConnectionManager] ✅ Device \(host) is healthy (polling every \(Int(health.currentPollInterval))s)")
+    }
+    
+    /// ✅ Best Practice: Record device failure and adapt polling interval
+    @MainActor
+    private func recordDeviceFailure(for host: String) {
+        var health = deviceHealthState[host] ?? DeviceHealth()
+        health.consecutiveFailures += 1
+        
+        // Adaptive polling based on failure count (like Nest, Hue, UniFi apps)
+        switch health.consecutiveFailures {
+        case 1...2:
+            // First few failures - might be temporary, slow down a bit
+            health.currentPollInterval = DeviceHealth.degradedInterval
+            health.isHealthy = false
+            print("[ConnectionManager] ⚠️ Device \(host) degraded (polling every \(Int(health.currentPollInterval))s)")
+            
+        case DeviceHealth.maxFailuresBeforeSlow...:
+            // Multiple failures - device likely offline, check infrequently
+            health.currentPollInterval = DeviceHealth.unhealthyInterval
+            health.isHealthy = false
+            print("[ConnectionManager] 🔴 Device \(host) appears offline (polling every \(Int(health.currentPollInterval))s)")
+            
+        default:
+            break
+        }
+        
+        deviceHealthState[host] = health
+    }
+    
+    /// ✅ Start background health check for a device (continuous monitoring)
+    func startHealthMonitoring(for host: String, nodeID: String) {
+        // Cancel existing task if any
+        healthCheckTasks[host]?.cancel()
+        
+        healthCheckTasks[host] = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                
+                // Get current health state
+                let health = self.deviceHealthState[host] ?? DeviceHealth()
+                
+                // Wait for the adaptive interval
+                try? await Task.sleep(for: .seconds(health.currentPollInterval))
+                guard !Task.isCancelled else { break }
+                
+                // Try to connect/reconnect
+                self.tryWiFi(host: host, nodeID: nodeID)
+            }
+        }
+        
+        print("[ConnectionManager] Started health monitoring for \(host)")
+    }
+    
+    /// Stop health monitoring for a device
+    func stopHealthMonitoring(for host: String) {
+        healthCheckTasks[host]?.cancel()
+        healthCheckTasks.removeValue(forKey: host)
+        print("[ConnectionManager] Stopped health monitoring for \(host)")
     }
 
     var isOnline: Bool {

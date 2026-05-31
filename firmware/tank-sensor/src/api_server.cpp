@@ -172,8 +172,16 @@ void ApiServer::_setupRest() {
         [](AsyncWebServerRequest* req, JsonVariant& json) {
             String body;
             serializeJson(json, body);
+            Serial.printf("[API] Config update: %s\n", body.c_str());
             bool ok = config.applyPartialJson(body.c_str());
-            if (ok) resetSensorFilter();   // tank range may have changed
+            if (ok) {
+                resetSensorFilter();   // tank range may have changed
+                uint32_t intervalS = config.d.testing_mode
+                                     ? config.d.test_poll_interval_s
+                                     : config.d.poll_interval_s;
+                Serial.printf("[API] Config applied — test_mode=%s  poll=%us\n",
+                              config.d.testing_mode ? "ON" : "OFF", intervalS);
+            }
             req->send(ok ? 200 : 400, "application/json",
                       ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"parse_error\"}");
         }));
