@@ -33,11 +33,15 @@ struct WaterMonitorApp: App {
             ContentView()
                 .environment(connectionManager)
                 .modelContainer(modelContainer)
+                .tankAlertDialog()  // ✅ Add in-app alert dialogs
                 .onAppear {
                     // ✅ Restore devices from backup if needed
                     _ = DatabaseMigrationManager.restoreFromBackup(
                         modelContext: modelContainer.mainContext
                     )
+                    
+                    // ✅ Request notification permission
+                    NotificationService.shared.requestPermission()
                 }
         }
     }
