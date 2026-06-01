@@ -215,13 +215,19 @@ struct DeviceDetailView: View {
                 }
             }
 
+            // Status messages (notification checking now handled by ConnectionManager)
             if let config = deviceConfig, let status = deviceStatus {
+                // Show status message
                 if status.levelPct <= config.alertLowPct {
-                    Label("Low water level", systemImage: "exclamationmark.triangle.fill")
+                    Label("Low water level - Turn on pump", systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline)
                         .foregroundStyle(.red)
+                } else if status.levelPct >= 100 {
+                    Label("Tank is FULL - Turn off pump immediately", systemImage: "checkmark.circle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.green)
                 } else if status.levelPct >= config.alertHighPct {
-                    Label("Tank nearly full", systemImage: "exclamationmark.triangle.fill")
+                    Label("Tank nearly full (\(status.levelPct)%) - Prepare to turn off pump", systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline)
                         .foregroundStyle(.orange)
                 }
