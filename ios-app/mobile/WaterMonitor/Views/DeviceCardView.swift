@@ -1,4 +1,3 @@
-// /Users/yugeshmluv/Work/Projects/code/Water-Monitor/os-app/WaterMonitor/WaterMonitor/Views/DeviceCardView.swift
 import SwiftUI
 
 struct DeviceCardView: View {

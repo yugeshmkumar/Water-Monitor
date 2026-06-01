@@ -3,47 +3,42 @@ import SwiftData
 
 @main
 struct WaterMonitorApp: App {
-    @State private var connectionManager = ConnectionManager()
-    @State private var notificationManager = NotificationManager()
-
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            DeviceReading.self,
-            SavedDevice.self,
-            Tank.self,
-            MotorGroup.self,
-        ])
-
-        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
+    let modelContainer: ModelContainer
+    let connectionManager = ConnectionManager()
+    
+    init() {
+        // Initialize SwiftData
         do {
-            return try ModelContainer(for: schema, configurations: [config])
+            modelContainer = try ModelContainer(
+                for: SavedDevice.self, DeviceReading.self
+            )
         } catch {
-            print("❌ ModelContainer creation failed: \(error)")
-
-            // Schema mismatch — delete old store and recreate
-            // (development only; in production, implement proper migration)
-            try? FileManager.default.removeItem(at: config.url)
-            print("🔄 Deleted old data store, will recreate with new schema")
-
-            do {
-                return try ModelContainer(for: schema, configurations: [config])
-            } catch {
-                fatalError("Could not create ModelContainer: \(error)")
-            }
+            print("[App] Failed to load database: \(error)")
+            fatalError("Could not create ModelContainer: \(error)")
         }
-    }()
-
+        
+        // ✅ Migrate database if needed
+        DatabaseMigrationManager.migrateIfNeeded(
+            modelContext: modelContainer.mainContext
+        )
+        
+        // ✅ Configure background tasks
+        BackgroundTaskManager.shared.configure(
+            connectionManager: connectionManager
+        )
+    }
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(connectionManager)
-                .environment(notificationManager)
+                .modelContainer(modelContainer)
                 .onAppear {
-                    let cache = DataCache(context: sharedModelContainer.mainContext)
-                    connectionManager.configure(dataCache: cache)
+                    // ✅ Restore devices from backup if needed
+                    _ = DatabaseMigrationManager.restoreFromBackup(
+                        modelContext: modelContainer.mainContext
+                    )
                 }
         }
-        .modelContainer(sharedModelContainer)
     }
 }

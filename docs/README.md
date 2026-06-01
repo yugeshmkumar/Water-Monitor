@@ -1,0 +1,3 @@
+# Water Monitor Documentation
+
+## Structure

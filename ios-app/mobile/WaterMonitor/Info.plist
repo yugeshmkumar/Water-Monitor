@@ -15,5 +15,16 @@
 		<string>_http._tcp</string>
 		<string>_ws._tcp</string>
 	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+
+	<!-- Background Task Identifier -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.watermonitor.refresh</string>
+	</array>
 </dict>
 </plist>

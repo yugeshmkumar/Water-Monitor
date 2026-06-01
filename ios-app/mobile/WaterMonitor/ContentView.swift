@@ -1,4 +1,3 @@
-// /Users/yugeshmluv/Work/Projects/code/Water-Monitor/os-app/WaterMonitor/WaterMonitor/ContentView.swift
 import SwiftUI
 import SwiftData
 

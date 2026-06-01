@@ -76,7 +76,7 @@ final class BLEService: NSObject {
         peripheral?.writeValue(data, for: char, type: .withResponse)
         
         // After writing config, request it back to update the UI
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + NetworkConstants.bleConfigWriteEchoDelay) { [weak self] in
             print("[BLE] Reading config after write...")
             self?.readConfig()
         }
@@ -96,19 +96,18 @@ final class BLEService: NSObject {
 
     private func subscribeAll() {
         print("[BLE] subscribeAll: discovered \(charMap.count) characteristics")
+        
+        // Subscribe to notifications first
         for uuid in [GATT.levelRead, GATT.statusRead, GATT.cmdResult] {
             if let c = charMap[uuid] {
                 peripheral?.setNotifyValue(true, for: c)
             }
         }
 
-        // Delay reading AA03 slightly to ensure peripheral is ready
+        // Read config immediately after subscribing
         if let c = charMap[GATT.cfgRead] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self, weak c] in
-                guard let c = c else { return }
-                print("[BLE] reading AA03 config...")
-                self?.peripheral?.readValue(for: c)
-            }
+            print("[BLE] reading AA03 config...")
+            peripheral?.readValue(for: c)
         } else {
             print("[BLE] ⚠️ AA03 config characteristic not found!")
         }

@@ -1,49 +1,52 @@
 import Foundation
+import Combine
 
 @Observable
-final class WiFiService {
+final class WiFiService: DeviceService {
     var liveStatus: DeviceStatus?
     var deviceConfig: DeviceConfig?
-    var isConnected: Bool = false
+    var isConnected: Bool = false {
+        didSet {
+            if oldValue != isConnected {
+                onConnectionStateChanged?(isConnected)
+            }
+        }
+    }
     var host: String?
     var lastError: Error?
     var autoReconnect: Bool = true
     var commandResult: String?
-    var onLiveReading: ((DeviceStatus) -> Void)?  // Callback when live data arrives (WiFi equivalent of BLE)
+    
+    // DeviceService callbacks
+    var onLiveReading: ((DeviceStatus) -> Void)?
+    var onConfigReceived: ((DeviceConfig) -> Void)?
+    var onConnectionStateChanged: ((Bool) -> Void)?
 
     private let session: URLSession
     private let wsSession: URLSession
     private var wsTask: URLSessionWebSocketTask?
     private var pingTask: Task<Void, Never>?
     
-    // ✅ Best Practice: Exponential backoff for reconnection
+    // Connection state tracking
     private var reconnectAttempts: Int = 0
     private var maxReconnectAttempts: Int = 5
     private var reconnectTask: Task<Void, Never>?
-    
-    // ✅ Best Practice: Connection state tracking to prevent duplicates
     private var isConnecting: Bool = false
     private var isReconnecting: Bool = false
 
     init() {
-        // Regular session for REST calls with timeout
         let sessionConfig = URLSessionConfiguration.default
-        sessionConfig.timeoutIntervalForRequest = 8  // ✅ Reduced from 10s - fail faster
-        sessionConfig.timeoutIntervalForResource = 20  // ✅ Reduced from 30s
-        sessionConfig.waitsForConnectivity = false  // ✅ Don't wait indefinitely
-        
-        // ✅ Disable proxy for local network connections
+        sessionConfig.timeoutIntervalForRequest = NetworkConstants.wifiTimeout
+        sessionConfig.timeoutIntervalForResource = NetworkConstants.wifiResourceTimeout
+        sessionConfig.waitsForConnectivity = false
         sessionConfig.connectionProxyDictionary = [:]
         
         self.session = URLSession(configuration: sessionConfig)
         
-        // Separate session for WebSocket with appropriate timeout
         let wsConfig = URLSessionConfiguration.default
-        wsConfig.timeoutIntervalForRequest = 30  // ✅ Reduced from 60s
-        wsConfig.timeoutIntervalForResource = 180  // ✅ Reduced from 300s
+        wsConfig.timeoutIntervalForRequest = NetworkConstants.webSocketTimeout
+        wsConfig.timeoutIntervalForResource = NetworkConstants.webSocketResourceTimeout
         wsConfig.waitsForConnectivity = false
-        
-        // ✅ Disable proxy to allow direct local network connections
         wsConfig.connectionProxyDictionary = [:]
         
         self.wsSession = URLSession(configuration: wsConfig)
@@ -51,9 +54,28 @@ final class WiFiService {
 
     func configure(host: String) {
         self.host = host
-        // ✅ Reset reconnection state when reconfiguring
         reconnectAttempts = 0
         autoReconnect = true
+    }
+    
+    // MARK: - DeviceService Protocol
+    
+    func connect() async throws {
+        guard host != nil else {
+            throw AppError.connectionFailed(host: "unknown", reason: "No host configured")
+        }
+        
+        let status = try await fetchStatus()
+        let config = try await fetchConfig()
+        
+        liveStatus = status
+        deviceConfig = config
+        
+        connectWebSocket()
+    }
+    
+    func disconnect() {
+        disconnectWebSocket()
     }
 
     // MARK: - REST
@@ -93,13 +115,18 @@ final class WiFiService {
         do {
             try await post(path: "/api/config", body: patch)
             lastError = nil
-            // Fetch updated config after successful patch
-            print("[WiFi] Config patched, fetching updated config...")
-            do {
-                _ = try await fetchConfig()
-                print("[WiFi] Config refreshed successfully")
-            } catch {
-                print("[WiFi] Warning: Failed to refresh config after patch: \(error)")
+            
+            // Only fetch if WebSocket is disconnected (otherwise it will push update)
+            if !isConnected {
+                print("[WiFi] Config patched, fetching updated config...")
+                do {
+                    _ = try await fetchConfig()
+                    print("[WiFi] Config refreshed successfully")
+                } catch {
+                    print("[WiFi] Warning: Failed to refresh config after patch: \(error)")
+                }
+            } else {
+                print("[WiFi] Config patched, waiting for WebSocket update...")
             }
         } catch {
             lastError = error
@@ -126,7 +153,6 @@ final class WiFiService {
     // MARK: - WebSocket
 
     func connectWebSocket() {
-        // ✅ Best Practice: Prevent duplicate connection attempts
         guard !isConnecting && !isConnected else {
             print("[WiFi] WebSocket already connected or connecting")
             return
@@ -140,16 +166,13 @@ final class WiFiService {
         isConnecting = true
         wsTask = wsSession.webSocketTask(with: url)
         wsTask?.resume()
-        isConnected = true
-        isConnecting = false
-        reconnectAttempts = 0  // ✅ Reset on successful connection
+        
         print("[WiFi] WebSocket connecting to \(url)")
         receiveNext()
         startPingTimer()
     }
 
     func disconnectWebSocket() {
-        // ✅ Best Practice: Cancel all reconnection attempts
         reconnectTask?.cancel()
         reconnectTask = nil
         isReconnecting = false
@@ -172,11 +195,19 @@ final class WiFiService {
                 guard let self, self.wsTask != nil else { return }
                 switch result {
                 case .success(let msg):
+                    // ✅ Set connected ONLY after first successful message
+                    if !self.isConnected {
+                        self.isConnected = true
+                        self.isConnecting = false
+                        self.reconnectAttempts = 0
+                        print("[WiFi] WebSocket connected successfully")
+                    }
+                    
                     if case .string(let text) = msg,
                        let data = text.data(using: .utf8),
                        let s = try? JSONDecoder().decode(DeviceStatus.self, from: data) {
                         self.liveStatus = s
-                        self.onLiveReading?(s)  // Notify observers (like ConnectionManager) of new data
+                        self.onLiveReading?(s)
                         print("[WiFi] Received live reading: \(s.levelPct)% @ \(s.distanceCM)cm")
                     } else if case .string(let text) = msg {
                         print("[WiFi] Received non-status message: \(text)")
@@ -188,7 +219,7 @@ final class WiFiService {
                     self.isConnected = false
                     self.isConnecting = false
                     
-                    // ✅ Best Practice: Exponential backoff with max attempts
+                    // Exponential backoff with max attempts
                     if self.autoReconnect && !Task.isCancelled && !self.isReconnecting {
                         guard self.reconnectAttempts < self.maxReconnectAttempts else {
                             print("[WiFi] Max reconnection attempts reached, giving up")
@@ -199,7 +230,6 @@ final class WiFiService {
                         self.isReconnecting = true
                         self.reconnectAttempts += 1
                         
-                        // Exponential backoff: 2^attempts seconds (2s, 4s, 8s, 16s, 32s)
                         let delay = min(pow(2.0, Double(self.reconnectAttempts)), 32.0)
                         print("[WiFi] WebSocket reconnecting in \(Int(delay))s (attempt \(self.reconnectAttempts)/\(self.maxReconnectAttempts))...")
                         
@@ -222,7 +252,7 @@ final class WiFiService {
         pingTask?.cancel()
         pingTask = Task { [weak self] in
             while let self, self.wsTask != nil, !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
+                try? await Task.sleep(for: .seconds(NetworkConstants.webSocketPingInterval))
                 guard !Task.isCancelled else { break }
                 self.wsTask?.sendPing { _ in }
             }
@@ -254,7 +284,6 @@ final class WiFiService {
         return URL(string: "ws://\(h)/live")
     }
     
-    // ✅ Best Practice: Identify timeout errors to reduce log noise
     private func isTimeoutError(_ error: Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut

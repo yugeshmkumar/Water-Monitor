@@ -1,4 +1,3 @@
-// /Users/yugeshmluv/Work/Projects/code/Water-Monitor/os-app/WaterMonitor/WaterMonitor/Views/DeviceDetailView.swift
 import SwiftUI
 
 struct DeviceDetailView: View {
@@ -18,6 +17,10 @@ struct DeviceDetailView: View {
     
     // ✅ Live mode toggle (UI-only, forces real-time updates)
     @State private var liveMode: Bool = false
+    
+    // ✅ Chart throttling
+    @State private var displayedLevelPct: Int = 0
+    @State private var chartUpdateTask: Task<Void, Never>?
 
     // ✅ Check if THIS specific device is connected
     private var isConnected: Bool {
@@ -58,54 +61,7 @@ struct DeviceDetailView: View {
         .navigationTitle(device.displayName)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
-            // ✅ TEST MODE Toggle (top right) - prominent and clear
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: {
-                    liveMode.toggle()
-                    Task {
-                        if liveMode {
-                            // Enable test mode with current interval
-                            await cm.writeConfig([
-                                "testing_mode": true,
-                                "test_poll_interval_s": localTestInterval
-                            ], for: device.nodeID)
-                        } else {
-                            // Disable test mode
-                            await cm.writeConfig([
-                                "testing_mode": false
-                            ], for: device.nodeID)
-                        }
-                    }
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: liveMode ? "flame.fill" : "flame")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("TEST")
-                            .font(.system(size: 11, weight: .bold))
-                            .tracking(0.5)
-                    }
-                    .foregroundStyle(liveMode ? .white : .orange)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(liveMode ? Color.orange : Color.orange.opacity(0.15))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(Color.orange, lineWidth: liveMode ? 0 : 1.5)
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(!isConnected)
-                .opacity(isConnected ? 1.0 : 0.5)
-            }
-            
-            ToolbarItem(placement: .primaryAction) {
-                NavigationLink(destination: DeviceConfigView(device: device)) {
-                    Image(systemName: "gearshape")
-                }
-            }
+            toolbarContent
         }
         .overlay {
             if !isConnected {
@@ -118,6 +74,80 @@ struct DeviceDetailView: View {
         .sheet(isPresented: $showHealthCheck) {
             DeviceHealthCheckView(device: device)
         }
+        .onChange(of: deviceStatus?.levelPct) { _, newValue in
+            // ✅ Throttle chart updates to max 1 per second
+            chartUpdateTask?.cancel()
+            chartUpdateTask = Task {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    displayedLevelPct = newValue ?? 0
+                }
+            }
+        }
+        .onAppear {
+            displayedLevelPct = deviceStatus?.levelPct ?? 0
+        }
+        .onDisappear {
+            // ✅ Cancel all background tasks
+            sliderDebounceTask?.cancel()
+            chartUpdateTask?.cancel()
+        }
+    }
+
+    // MARK: - Toolbar
+    
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarTrailing) {
+            testModeButton
+        }
+        
+        ToolbarItem(placement: .primaryAction) {
+            NavigationLink(destination: DeviceConfigView(device: device)) {
+                Image(systemName: "gearshape")
+            }
+        }
+    }
+    
+    private var testModeButton: some View {
+        Button(action: {
+            liveMode.toggle()
+            Task {
+                if liveMode {
+                    _ = await cm.writeConfig([
+                        "testing_mode": true,
+                        "test_poll_interval_s": localTestInterval
+                    ], for: device.nodeID)
+                } else {
+                    _ = await cm.writeConfig([
+                        "testing_mode": false
+                    ], for: device.nodeID)
+                }
+            }
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: liveMode ? "flame.fill" : "flame")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("TEST")
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(0.5)
+            }
+            .foregroundStyle(liveMode ? .white : .orange)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(liveMode ? Color.orange : Color.orange.opacity(0.15))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.orange, lineWidth: liveMode ? 0 : 1.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isConnected)
+        .opacity(isConnected ? 1.0 : 0.5)
     }
 
     // MARK: - Subviews
@@ -157,12 +187,12 @@ struct DeviceDetailView: View {
                 Circle()
                     .stroke(.quaternary, lineWidth: 16)
                 Circle()
-                    .trim(from: 0, to: Double(deviceStatus?.levelPct ?? 0) / 100.0)
+                    .trim(from: 0, to: Double(displayedLevelPct) / 100.0)  // ✅ Use throttled value
                     .stroke(gaugeColor, style: StrokeStyle(lineWidth: 16, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                    .animation(.easeInOut(duration: 0.4), value: deviceStatus?.levelPct)
+                    .animation(.easeInOut(duration: 0.8), value: displayedLevelPct)  // ✅ Smoother animation
                 VStack(spacing: 0) {
-                    Text("\(deviceStatus?.levelPct ?? 0)")
+                    Text("\(displayedLevelPct)")  // ✅ Use throttled value
                         .font(.system(size: 56, weight: .bold, design: .rounded))
                     Text("%")
                         .font(.title3)
@@ -254,7 +284,7 @@ struct DeviceDetailView: View {
                                     try? await Task.sleep(for: .milliseconds(500))
                                     guard !Task.isCancelled else { return }
                                     // Enable test mode on device with this interval
-                                    await cm.writeConfig([
+                                    _ = await cm.writeConfig([
                                         "testing_mode": true,
                                         "test_poll_interval_s": Int(newVal)
                                     ], for: device.nodeID)

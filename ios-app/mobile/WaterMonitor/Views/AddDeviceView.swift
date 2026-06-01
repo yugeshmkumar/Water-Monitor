@@ -1,4 +1,3 @@
-// /Users/yugeshmluv/Work/Projects/code/Water-Monitor/os-app/WaterMonitor/WaterMonitor/Views/AddDeviceView.swift
 import SwiftUI
 import SwiftData
 import CoreBluetooth

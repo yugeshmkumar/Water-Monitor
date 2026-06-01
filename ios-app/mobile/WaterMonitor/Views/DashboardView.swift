@@ -114,7 +114,7 @@ struct DashboardView: View {
                     set: { newValue in
                         Task {
                             if let nodeID = cm.config?.nodeID {
-                                await cm.writeConfig(["test_poll_interval_s": Int(newValue)], for: nodeID)
+                                _ = await cm.writeConfig(["test_poll_interval_s": Int(newValue)], for: nodeID)
                             }
                         }
                     }

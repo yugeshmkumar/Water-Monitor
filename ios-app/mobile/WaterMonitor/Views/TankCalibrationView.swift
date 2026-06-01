@@ -20,6 +20,9 @@ struct TankCalibrationView: View {
     @State private var calculatedFullCM: Double?  // ✅ Store calculated values to display
     @State private var calculatedEmptyCM: Double?
     
+    // ✅ Task management for proper cancellation
+    @State private var liveReadingTask: Task<Void, Never>?
+    
     // ✅ Get status for THIS device
     private var deviceStatus: DeviceStatus? {
         if let device = device {
@@ -493,7 +496,10 @@ struct TankCalibrationView: View {
     // MARK: - Live reading logic
 
     private func startLiveReadings() {
-        Task {
+        // ✅ Cancel any existing task
+        liveReadingTask?.cancel()
+        
+        liveReadingTask = Task {
             while !Task.isCancelled {
                 if let status = deviceStatus {  // ✅ Use device-specific status
                     await MainActor.run {
@@ -502,7 +508,7 @@ struct TankCalibrationView: View {
                         updateStabilityAndRange(status.distanceCM)
                     }
                 }
-                try? await Task.sleep(for: .milliseconds(500))
+                try? await Task.sleep(for: .milliseconds(CalibrationConstants.stabilityCheckInterval))
             }
         }
     }
@@ -546,7 +552,7 @@ struct TankCalibrationView: View {
         isSaving = true
         Task {
             if let device = device {
-                await cm.writeConfig(["auto_calibration_enabled": true], for: device.nodeID)
+                _ = await cm.writeConfig(["auto_calibration_enabled": true], for: device.nodeID)
             } else {
                 await cm.writeConfig(["auto_calibration_enabled": true])  // Legacy
             }
@@ -607,7 +613,7 @@ struct TankCalibrationView: View {
 
             Task {
                 if let device = device {
-                    await cm.writeConfig([
+                    _ = await cm.writeConfig([
                         "tank_empty_cm": emptyCM,
                         "tank_full_cm": fullCM
                     ], for: device.nodeID)
