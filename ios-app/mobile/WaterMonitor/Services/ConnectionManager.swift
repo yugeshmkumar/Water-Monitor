@@ -75,6 +75,17 @@ final class ConnectionManager {
             self?.dataCache?.save(status)
             if let nodeID = self?.ble.deviceConfig?.nodeID, !nodeID.isEmpty {
                 self?.onDeviceActivity?(nodeID)
+                
+                // ✅ Check tank level and trigger notifications
+                if let config = self?.ble.deviceConfig {
+                    NotificationService.shared.checkTankLevel(
+                        nodeID: nodeID,
+                        levelPct: status.levelPct,
+                        alertLowPct: config.alertLowPct,
+                        alertHighPct: config.alertHighPct,
+                        motorName: nil
+                    )
+                }
             }
         }
         
@@ -104,6 +115,17 @@ final class ConnectionManager {
             self?.dataCache?.save(status)
             if let nodeID = self?.wifi.deviceConfig?.nodeID, !nodeID.isEmpty {
                 self?.onDeviceActivity?(nodeID)
+                
+                // ✅ Check tank level and trigger notifications
+                if let config = self?.wifi.deviceConfig {
+                    NotificationService.shared.checkTankLevel(
+                        nodeID: nodeID,
+                        levelPct: status.levelPct,
+                        alertLowPct: config.alertLowPct,
+                        alertHighPct: config.alertHighPct,
+                        motorName: nil
+                    )
+                }
             }
             print("[ConnectionManager] WiFi: saved reading \(status.levelPct)%")
         }
@@ -311,6 +333,21 @@ final class ConnectionManager {
             wifiService.onLiveReading = { [weak self] status in
                 self?.dataCache?.save(status)
                 self?.onDeviceActivity?(nodeID)
+                
+                // ✅ Check tank level and trigger notifications for multi-device
+                // Get config from ConnectionManager's stored connections
+                if let config = self?.wifiConnections[nodeID]?.deviceConfig {
+                    print("[ConnectionManager] Checking notifications for \(nodeID): level=\(status.levelPct)%, low=\(config.alertLowPct)%, high=\(config.alertHighPct)%")
+                    NotificationService.shared.checkTankLevel(
+                        nodeID: nodeID,
+                        levelPct: status.levelPct,
+                        alertLowPct: config.alertLowPct,
+                        alertHighPct: config.alertHighPct,
+                        motorName: nil
+                    )
+                } else {
+                    print("[ConnectionManager] ⚠️ Cannot check notifications for \(nodeID) - config not loaded yet")
+                }
             }
             
             wifiService.onConnectionStateChanged = { [weak self, nodeID] connected in
