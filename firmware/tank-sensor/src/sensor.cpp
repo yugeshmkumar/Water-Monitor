@@ -13,40 +13,52 @@
 #define READINGS_N       5
 #define READING_DELAY_MS 60
 
-// ── Kalman filter parameters ──────────────────────────────────────────────────
-// Layer 1: per-reading noise filter (runs on every hardware median).
-// Q: how much can true distance change per poll? σ≈2 cm → Q=4.
-// R: JSN-SR04T sensor noise σ≈5 cm → R=25.
-// OUTLIER_SIGMA: reject if innovation > 3 standard deviations (99.7% confidence).
-#define KF_Q             4.0f
-#define KF_R             25.0f
-#define KF_OUTLIER_SIGMA 3.0f
-#define KF_MAX_REJECT_STREAK 6
+// ── Statistical ML Validator parameters ──────────────────────────────────────
+// Dual-criterion validator: Welford online stats + sliding linear trend prediction.
+// Warmup: first 30 readings → sort → trim 10% → seed both criteria
+// Criterion A: reject if |reading - running_mean| > 2σ (Welford)
+// Criterion B: reject if |reading - predicted_next| > 2σ_residual (linear trend)
+// Mini-confirmation: 2-reading agreement within confirmTol() before emission
+#define WARMUP_N      30
+#define WARMUP_TRIM    3       // discard bottom/top 3 of 30 (10% each)
+#define TREND_WINDOW   8       // 8-point sliding window for trend LS
+#define REJECT_SIGMA  2.0f     // z-score threshold for both criteria
+#define WF_DECAY      0.995f   // forgetting factor for Welford M2
 
-static float kfState   = -1.0f;
-static float kfP       = 1000.0f;
-static int   kfRejects = 0;
+struct ValidatorState {
+    // Warmup buffer
+    float    wu_buf[WARMUP_N];
+    uint8_t  wu_count;
+    bool     wu_done;
 
-// ── Consensus confirmation window ─────────────────────────────────────────────
-// Layer 2: only report a level when N_CONFIRM consecutive Kalman-accepted readings
-// agree within CONFIRM_TOL_CM of each other.  A single spurious reading that sneaks
-// past the Kalman filter will reset the window and trigger a 2 s retry cycle.
-// Once stable, each new in-tolerance reading slides the window — no extra retries.
-#define CONFIRM_N   3
+    // Criterion A: Welford online running mean/variance
+    float    wf_mean;
+    float    wf_M2;            // sum of squared deviations (not divided by n)
+    uint16_t wf_count;
 
-// Tolerance scales with tank size: 3 % of range, minimum 5 cm.
-// For a 130 cm range → 5 cm.  For a 200 cm range → 6 cm.
+    // Criterion B: 8-point sliding window for online linear regression
+    float    tr_buf[TREND_WINDOW];
+    uint8_t  tr_head;          // ring buffer head index
+    uint8_t  tr_count;         // number of valid entries (up to TREND_WINDOW)
+    float    tr_sx, tr_sy;     // sums: Σx, Σy
+    float    tr_sxx, tr_sxy;   // sums: Σx², Σxy (x is time index 0..7)
+
+    // Residual tracking for trend standard deviation
+    float    tr_res_mean;
+    float    tr_res_M2;
+    uint16_t tr_res_count;
+
+    // Mini-confirmation: 2-reading agreement
+    float    mc_last;          // -1.0 = no prior
+};
+
+static ValidatorState vs = {};
+
+// Tolerance scales with tank size: 3% of range, minimum 5 cm.
 static inline float confirmTol() {
     float range = config.d.tank_empty_cm - config.d.tank_full_cm;
     return fmaxf(range * 0.03f, 5.0f);
 }
-
-// State machine for the confirmation window
-enum ConfirmState { CS_SEEKING, CS_STABLE };
-static ConfirmState csState       = CS_SEEKING;
-static float        csBuf[CONFIRM_N] = {};
-static int          csCount       = 0;
-static float        csConfirmed   = -1.0f;  // last published stable value
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -91,145 +103,198 @@ static float sortedMedian(float* buf, int n) {
     return buf[n / 2];
 }
 
-// ── Confirmation state machine ──────────────────────────────────────────────────
-// Layer 2 sits on top of Kalman: only publishes a level when CONFIRM_N
-// consecutive accepted readings agree within tolerance.  Prevents a single
-// spurious reading from momentarily reporting the wrong level.
-//
-// State CS_SEEKING: accumulate readings into csBuf until we have CONFIRM_N in agreement.
-//   If a reading breaks consensus, reset and start over (retry 2 s later).
-// State CS_STABLE: new reading is within tolerance of csConfirmed.  Slide the window:
-//   shift csBuf left, add new reading on the right.
-static float confirmationUpdate(float kfEstimate) {
-    if (kfEstimate < 0.0f) return -1.0f;  // Kalman rejected it
-
-    float tol = confirmTol();
-
-    switch (csState) {
-    case CS_SEEKING: {
-        // Fill the buffer until we have CONFIRM_N readings
-        csBuf[csCount] = kfEstimate;
-        csCount++;
-
-        if (csCount < CONFIRM_N) {
-            // Still seeking — need more readings
-            Serial.printf("[Confirm] Seeking: %d/%d readings (latest: %.1f cm)\n", csCount, CONFIRM_N, kfEstimate);
-            return -1.0f;
+// ── Helper: insertion sort for warmup initialization ──────────────────────────
+static void insertionSortAscending(float* buf, int n) {
+    for (int i = 1; i < n; i++) {
+        float k = buf[i];
+        int j = i - 1;
+        while (j >= 0 && buf[j] > k) {
+            buf[j + 1] = buf[j];
+            j--;
         }
-
-        // Have CONFIRM_N readings — check if they're all within tolerance of each other
-        float minVal = csBuf[0], maxVal = csBuf[0];
-        for (int i = 1; i < CONFIRM_N; i++) {
-            if (csBuf[i] < minVal) minVal = csBuf[i];
-            if (csBuf[i] > maxVal) maxVal = csBuf[i];
-        }
-
-        if (maxVal - minVal > tol) {
-            // Readings don't agree — reset and retry
-            Serial.printf("[Confirm] Disagreement: range %.1f cm > tol %.1f cm — seeking again\n",
-                          maxVal - minVal, tol);
-            csCount = 0;
-            return -1.0f;
-        }
-
-        // All CONFIRM_N readings agree — move to stable state and publish the average
-        float sum = 0.0f;
-        for (int i = 0; i < CONFIRM_N; i++) sum += csBuf[i];
-        csConfirmed = sum / CONFIRM_N;
-        csState = CS_STABLE;
-        Serial.printf("[Confirm] Stable at %.1f cm\n", csConfirmed);
-        return csConfirmed;
+        buf[j + 1] = k;
     }
-
-    case CS_STABLE: {
-        // Check if new reading is still within tolerance
-        if (fabsf(kfEstimate - csConfirmed) > tol) {
-            // Out of tolerance — potential change; switch back to SEEKING mode
-            Serial.printf("[Confirm] Divergence: %.1f cm (was %.1f cm) — seeking new consensus\n",
-                          kfEstimate, csConfirmed);
-            csCount = 1;
-            csBuf[0] = kfEstimate;
-            csState = CS_SEEKING;
-            return -1.0f;
-        }
-
-        // Still within tolerance — slide the window
-        for (int i = 0; i < CONFIRM_N - 1; i++) {
-            csBuf[i] = csBuf[i + 1];
-        }
-        csBuf[CONFIRM_N - 1] = kfEstimate;
-
-        // Re-compute the average from the sliding window
-        float sum = 0.0f;
-        for (int i = 0; i < CONFIRM_N; i++) sum += csBuf[i];
-        csConfirmed = sum / CONFIRM_N;
-        return csConfirmed;
-    }
-    }
-    return -1.0f;
 }
 
-// ── Kalman update ─────────────────────────────────────────────────────────────
-// Returns the filtered estimate if the measurement is plausible,
-// or -1.0 if it is a spike.  The filter is SELF-HEALING:
-//   - Each rejection causes kfP to grow (we become less certain).
-//   - A larger kfP → larger innovation std dev → wider acceptance window.
-//   - After KF_MAX_REJECT_STREAK rejections, history is treated as corrupted;
-//     the measurement is force-accepted and the filter re-initialises.
-static float kalmanUpdate(float measurement) {
-    // First valid measurement ever → initialise and trust it blindly
-    if (kfState < 0.0f) {
-        kfState   = measurement;
-        kfP       = KF_R;
-        kfRejects = 0;
-        return measurement;
+// ── Helper: push new reading into trend buffer and recompute LS sums ──────────
+static void trendPush(float y) {
+    // Ring buffer: vs.tr_head points to next insertion slot
+    // When buffer is full, recompute all sums; when not full, accumulate
+
+    if (vs.tr_count == TREND_WINDOW) {
+        // Buffer is full — add new, recompute sums from scratch
+        vs.tr_buf[vs.tr_head] = y;
+        vs.tr_head = (vs.tr_head + 1) % TREND_WINDOW;
+
+        // Recompute all sums (8 elements, negligible cost)
+        vs.tr_sx = vs.tr_sy = vs.tr_sxx = vs.tr_sxy = 0.0f;
+        for (int i = 0; i < TREND_WINDOW; i++) {
+            float xi = (float)i;
+            float yi = vs.tr_buf[(vs.tr_head + i) % TREND_WINDOW];
+            vs.tr_sx  += xi;
+            vs.tr_sy  += yi;
+            vs.tr_sxx += xi * xi;
+            vs.tr_sxy += xi * yi;
+        }
+    } else {
+        // Buffer not full — just append
+        float xi = (float)vs.tr_count;
+        vs.tr_buf[vs.tr_head] = y;
+        vs.tr_head = (vs.tr_head + 1) % TREND_WINDOW;
+        vs.tr_sx  += xi;
+        vs.tr_sy  += y;
+        vs.tr_sxx += xi * xi;
+        vs.tr_sxy += xi * y;
+        vs.tr_count++;
+    }
+}
+
+// ── Helper: predict next reading using linear regression on trend ──────────────
+static float trendPredict() {
+    float n   = (float)TREND_WINDOW;
+    float det = n * vs.tr_sxx - vs.tr_sx * vs.tr_sx;
+
+    // Degenerate case — fall back to running mean
+    if (fabsf(det) < 1e-6f) {
+        return vs.wf_mean;
     }
 
-    // ── Predict step ─────────────────────────────────────────────────────────
-    // State doesn't change between polls (tank level is stable over 30 s),
-    // but uncertainty grows by Q each cycle.
-    float P_pred = kfP + KF_Q;
+    // Compute slope b and intercept a from least squares
+    float b = (n * vs.tr_sxy - vs.tr_sx * vs.tr_sy) / det;
+    float a = (vs.tr_sy - b * vs.tr_sx) / n;
 
-    // ── Innovation (residual) ─────────────────────────────────────────────────
-    float innovation  = measurement - kfState;          // how far is new reading from prediction
-    float S           = P_pred + KF_R;                  // total innovation variance
-    float sigma       = sqrtf(S);                       // ± this many cm is "normal"
-    float threshold   = KF_OUTLIER_SIGMA * sigma;
+    // Predict at x = TREND_WINDOW (one step ahead from the current window)
+    return a + b * (float)TREND_WINDOW;
+}
 
-    // ── Outlier check ─────────────────────────────────────────────────────────
-    if (fabsf(innovation) > threshold) {
-        kfRejects++;
+// ── Main validator: dual-criterion outlier rejection + mini-confirmation ──────
+static float validatorUpdate(float median) {
+    static bool inited = false;
+    if (!inited) {
+        vs.mc_last = -1.0f;
+        inited = true;
+    }
 
-        if (kfRejects >= KF_MAX_REJECT_STREAK) {
-            // History is clearly wrong (e.g. sensor was temporarily obstructed,
-            // incorrectly mounted, or previous readings were bad).
-            // Force-accept this measurement and restart.
-            Serial.printf("[Sensor] History corrected after %d rejections — "
-                          "resetting to %.1f cm (prev_est=%.1f)\n",
-                          kfRejects, measurement, kfState);
-            kfState   = measurement;
-            kfP       = KF_R;
-            kfRejects = 0;
-            return measurement;
+    // ── PHASE 1: WARMUP ──────────────────────────────────────────────────────
+    if (!vs.wu_done) {
+        vs.wu_buf[vs.wu_count++] = median;
+        if (vs.wu_count < WARMUP_N) {
+            return -1.0f;  // Still collecting; don't emit reading yet
         }
 
-        // Normal rejection: grow uncertainty so threshold widens next time
-        kfP = P_pred + KF_Q;   // extra Q to speed up uncertainty growth
-        Serial.printf("[Sensor KF DEBUG] REJECTED: meas=%.1f est=%.1f innov=%.1f σ=%.1f thresh=%.1f streak=%d\n",
-                      measurement, kfState, innovation, sigma, threshold, kfRejects);
+        // Warmup complete — initialize both criteria from trimmed data
+        insertionSortAscending(vs.wu_buf, WARMUP_N);
+
+        // Trim 10% from bottom and top (3 readings each of 30)
+        int lo = WARMUP_TRIM;           // 3
+        int hi = WARMUP_N - WARMUP_TRIM; // 27, exclusive
+        int trimN = hi - lo;            // 24
+
+        // Compute trimmed mean and variance
+        float sum = 0.0f, sumSq = 0.0f;
+        for (int i = lo; i < hi; i++) sum += vs.wu_buf[i];
+        float mean = sum / trimN;
+        for (int i = lo; i < hi; i++) {
+            float d = vs.wu_buf[i] - mean;
+            sumSq += d * d;
+        }
+
+        // Seed Welford state (Criterion A)
+        vs.wf_mean  = mean;
+        vs.wf_M2    = sumSq;  // sum of squared deviations
+        vs.wf_count = (uint16_t)trimN;
+
+        // Seed trend buffer (Criterion B) with last 8 of trimmed readings
+        vs.tr_count = 0;
+        vs.tr_head  = 0;
+        vs.tr_sx = vs.tr_sy = vs.tr_sxx = vs.tr_sxy = 0.0f;
+        int start = (hi >= TREND_WINDOW) ? (hi - TREND_WINDOW) : lo;
+        for (int i = start; i < hi; i++) {
+            trendPush(vs.wu_buf[i]);
+        }
+
+        // Mini-confirmation state
+        vs.mc_last = -1.0f;
+        vs.wu_done = true;
+
+        Serial.printf("[Validator] Warmup complete (trimmed mean=%.1f, n=%d)\n", mean, trimN);
+        return -1.0f;  // Don't emit on warmup completion
+    }
+
+    // ── PHASE 2: VALIDATION ──────────────────────────────────────────────────
+
+    // Criterion A: z-score vs running mean (Welford)
+    float wf_std = (vs.wf_count > 1)
+        ? sqrtf(vs.wf_M2 / (vs.wf_count - 1))
+        : 999.0f;
+    bool rejectA = (fabsf(median - vs.wf_mean) > REJECT_SIGMA * wf_std);
+
+    // Criterion B: z-score vs linear trend prediction (only after 4 trend readings)
+    bool rejectB = false;
+    if (vs.tr_count >= 4) {
+        float predicted = trendPredict();
+        float res_std = (vs.tr_res_count > 1)
+            ? sqrtf(vs.tr_res_M2 / (vs.tr_res_count - 1))
+            : 999.0f;
+        rejectB = (fabsf(median - predicted) > REJECT_SIGMA * res_std);
+    }
+
+    // OR logic: reject if either criterion fires
+    if (rejectA || rejectB) {
+        Serial.printf("[Validator] REJECTED: meas=%.1f mean=%.1f wf_std=%.1f "
+                      "predicted=%.1f rejectA=%d rejectB=%d\n",
+                      median, vs.wf_mean, wf_std,
+                      (vs.tr_count >= 4) ? trendPredict() : -1.0f,
+                      (int)rejectA, (int)rejectB);
         return -1.0f;
     }
 
-    Serial.printf("[Sensor KF DEBUG] ACCEPTED: meas=%.1f innov=%.1f σ=%.1f (streak reset)\n",
-                  measurement, innovation, sigma);
+    // ── UPDATE STATISTICS (reading accepted) ─────────────────────────────────
 
-    // ── Update step (measurement accepted) ───────────────────────────────────
-    float K   = P_pred / S;                   // Kalman gain: 0 = ignore measurement, 1 = trust it fully
-    kfState   = kfState + K * innovation;     // blend prediction with measurement
-    kfP       = (1.0f - K) * P_pred;          // reduce uncertainty
-    kfRejects = 0;
+    // Update Welford state with forgetting factor
+    vs.wf_count++;
+    float delta  = median - vs.wf_mean;
+    vs.wf_mean  += delta / vs.wf_count;
+    float delta2 = median - vs.wf_mean;
+    vs.wf_M2     = vs.wf_M2 * WF_DECAY + delta * delta2;
+    vs.wf_M2     = fmaxf(vs.wf_M2, 0.0f);  // Guard against float precision issues
 
-    return kfState;   // return the smoothed estimate, not the raw reading
+    // Update residual tracking if trend is active
+    if (vs.tr_count >= 4) {
+        float predicted = trendPredict();
+        float residual  = median - predicted;
+        vs.tr_res_count++;
+        float rd  = residual - vs.tr_res_mean;
+        vs.tr_res_mean += rd / vs.tr_res_count;
+        float rd2 = residual - vs.tr_res_mean;
+        vs.tr_res_M2 = vs.tr_res_M2 * WF_DECAY + rd * rd2;
+        vs.tr_res_M2 = fmaxf(vs.tr_res_M2, 0.0f);
+    }
+
+    // Push to trend buffer
+    trendPush(median);
+
+    Serial.printf("[Validator] ACCEPTED: meas=%.1f mean=%.1f wf_std=%.1f\n",
+                  median, vs.wf_mean, wf_std);
+
+    // ── PHASE 3: MINI-CONFIRMATION (2-reading agreement) ─────────────────────
+    if (vs.mc_last < 0.0f) {
+        // First accepted reading after validation — hold for next one
+        vs.mc_last = median;
+        return -1.0f;
+    }
+
+    float tol = confirmTol();
+    if (fabsf(median - vs.mc_last) <= tol) {
+        // Two consecutive readings agree — emit average
+        float out  = (median + vs.mc_last) / 2.0f;
+        vs.mc_last = median;
+        return out;
+    }
+
+    // Readings diverge — this becomes new baseline, wait for agreement
+    vs.mc_last = median;
+    return -1.0f;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -269,23 +334,15 @@ float readDistanceCM() {
         return median;
     }
 
-    // Step 2: Kalman filter — per-reading noise suppression + self-healing
-    float kfEst = kalmanUpdate(median);
-
-    // Step 3: Consensus window — only report a level after CONFIRM_N (~3) readings
-    // agree within tolerance. Prevents a single outlier that sneaks past Kalman
-    // from momentarily showing the wrong level.
-    return confirmationUpdate(kfEst);
+    // Step 2: Statistical ML validator — dual-criterion outlier rejection with
+    //         online learning, warmup initialization, and mini-confirmation.
+    return validatorUpdate(median);
 }
 
 void resetSensorFilter() {
-    kfState     = -1.0f;
-    kfP         = 1000.0f;
-    kfRejects   = 0;
-    csState     = CS_SEEKING;
-    csCount     = 0;
-    csConfirmed = -1.0f;
-    Serial.println("[Sensor] Filters reset (Kalman + confirmation)");
+    vs         = {};  // zero-initialize all validator state
+    vs.mc_last = -1.0f;  // sentinel: no prior reading yet
+    Serial.println("[Sensor] Validator reset (warmup will restart)");
 }
 
 float computeLevelPct(float distCM, float emptyDist, float fullDist) {

@@ -72,6 +72,95 @@
 
 ---
 
+## Firmware Sensor Pipeline (ESP32-C6)
+
+### JSN-SR04T Distance Validation Flow
+
+```
+Hardware (Ultrasonic Sensor)
+       ↓  5 pulses @ 60ms intervals
+       │
+       ▼
+┌─────────────────────────────┐
+│  Multi-Sample Median        │
+│  (N=5, insertion sort)      │
+│  Reject if <3 valid pulses  │
+└────────────┬────────────────┘
+             │
+             ▼
+     ┌───────────────────┐
+     │ Testing Mode?     │
+     │ (bypass filter)   │
+     └──┬─────────┬──────┘
+        │ No      │ Yes
+        │         └──────▶ [Return raw median]
+        │
+        ▼
+┌──────────────────────────────────────────────┐
+│   Statistical ML Validator                   │
+│                                              │
+│  ┌──────────────────────────────────────┐  │
+│  │ Phase 1: Warmup (first 30 readings)  │  │
+│  │ • Collect → Sort → Trim 10%         │  │
+│  │ • Seed Welford mean/variance        │  │
+│  │ • Initialize 8-point trend buffer   │  │
+│  │ Returns: -1.0 (not ready yet)       │  │
+│  └──────────────────────────────────────┘  │
+│                                              │
+│  ┌──────────────────────────────────────┐  │
+│  │ Phase 2: Validation (dual-criterion) │  │
+│  │ Criterion A: |reading - mean| > 2σ   │  │
+│  │ Criterion B: |reading - predicted| > 2σ │
+│  │ (B active after 4 trend readings)   │  │
+│  │ Reject if A OR B fires               │  │
+│  └──────────────────────────────────────┘  │
+│                                              │
+│  ┌──────────────────────────────────────┐  │
+│  │ Phase 3: Mini-Confirmation           │  │
+│  │ 2 consecutive accepted readings      │  │
+│  │ must agree within confirmTol()       │  │
+│  │ Returns: averaged value or -1.0      │  │
+│  └──────────────────────────────────────┘  │
+└────────────┬───────────────────────────────┘
+             │
+             ▼
+      [Update gState]
+    distance_cm, level_pct
+             │
+             ▼
+┌──────────────────────────────────┐
+│  Store + Notify Downstream       │
+│  • LittleFS Queue (offline)      │
+│  • BLE notify (AA01)             │
+│  • WiFi WebSocket (/live)        │
+│  • MQTT (home/tank/level)        │
+└──────────────────────────────────┘
+```
+
+### Validator State (\~200 bytes)
+
+| Component | Bytes | Purpose |
+|-----------|-------|---------|
+| `wu_buf[30]` | 120 | Warmup collection buffer |
+| `wf_mean, wf_M2, wf_count` | 14 | Welford running stats (Criterion A) |
+| `tr_buf[8], tr_count, tr_head` | 35 | Sliding trend window + ring index |
+| `tr_sx/sy/sxx/sxy` | 16 | Online least-squares sums |
+| `tr_res_mean/M2, tr_res_count` | 14 | Residual Welford (trend σ) |
+| `mc_last` | 4 | Mini-confirmation prior |
+| **Total** | **\~198** | **Fits easily in remaining ESP32 RAM** |
+
+### Key Parameters
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `WARMUP_N` | 30 | Robust trimmed-mean initialization |
+| `WARMUP_TRIM` | 3 | Discard top/bottom 10% (remove outliers) |
+| `TREND_WINDOW` | 8 | Compact sliding window (32 bytes) |
+| `REJECT_SIGMA` | 2.0 | 95% confidence; avoids over-rejection |
+| `WF_DECAY` | 0.995 | Forgetting factor; ~200-reading effective window |
+
+---
+
 ## Connection Flow
 
 ### Initial Connection (BLE → WiFi Upgrade)

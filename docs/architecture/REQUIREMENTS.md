@@ -33,9 +33,11 @@ Phase 2 redesign to add cloud synchronization, multi-device profile support, AI-
   
 - **Sensor stability:** Distance must stay within [tank_full_cm - tolerance, tank_empty_cm + tolerance]
 
-#### Layer 2: Statistical Filters (Local to Device)
-- **Kalman filter** (already implemented—keep as-is)
-- **Confirmation window** (already implemented—keep as-is)
+#### Layer 2: Statistical ML Validator (Local to Device)
+- **Dual-criterion outlier detection** — Welford running mean (z-score) + linear trend prediction (z-score)
+- **Online learning** — warmup phase (30 readings), adaptive statistics with forgetting factor
+- **Mini-confirmation** — 2-reading agreement within tolerance threshold before emission
+- **Implementation:** Replaces previous Kalman filter; ~200 bytes of state, no pre-trained models needed
 
 #### Layer 3: Historical Pattern Recognition (Device + Cloud AI)
 - **Detect fill/drain cycles:** Identify when user is intentionally filling/draining
