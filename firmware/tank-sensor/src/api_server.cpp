@@ -8,6 +8,7 @@
 #include <ESPmDNS.h>
 #include <ElegantOTA.h>
 #include <WiFi.h>
+#include <nvs_flash.h>
 
 // HTTPUpdate for OTA-from-URL (requires WiFiClient)
 #include <HTTPUpdate.h>
@@ -218,11 +219,22 @@ void ApiServer::_setupRest() {
             char resultBuf[128];
             handlePinCommand(body.c_str(), resultBuf, sizeof(resultBuf));
 
-            // Deferred reboot: send response first
+            // Deferred commands: send response first, then act
             bool isReboot = (strcmp(json["cmd"] | "", "reboot") == 0);
+            bool isFactoryReset = (strcmp(json["cmd"] | "", "factory_reset") == 0);
+
             req->send(200, "application/json", resultBuf);
-            if (isReboot) {
+
+            delay(500);
+            if (isFactoryReset) {
+                Serial.println("[API] Factory reset requested — clearing NVS and queue...");
+                // Clear all NVS data
+                nvs_flash_erase();
+                // Clear queue
+                queueStore.clear();
                 delay(500);
+                ESP.restart();
+            } else if (isReboot) {
                 ESP.restart();
             }
         }));
