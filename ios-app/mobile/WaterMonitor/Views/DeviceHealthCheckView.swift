@@ -13,6 +13,7 @@ struct DeviceHealthCheckView: View {
     }
 
     var device: SavedDevice
+    var onDone: (() -> Void)? = nil  // Optional callback for when done button is pressed
 
     var body: some View {
         NavigationStack {
@@ -210,7 +211,13 @@ struct DeviceHealthCheckView: View {
             }
             .buttonStyle(.bordered)
 
-            Button(action: { dismiss() }) {
+            Button(action: { 
+                if let callback = onDone {
+                    callback()
+                } else {
+                    dismiss()
+                }
+            }) {
                 Text("Done")
                     .frame(maxWidth: .infinity)
             }

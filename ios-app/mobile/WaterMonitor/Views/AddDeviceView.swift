@@ -194,12 +194,21 @@ struct AddDeviceView: View {
     private func healthCheckView(device: SavedDevice) -> some View {
         NavigationStack {
             VStack {
-                DeviceHealthCheckView(device: device)
-                    .navigationBarBackButtonHidden(true)
+                DeviceHealthCheckView(device: device, onDone: {
+                    // Clean up and dismiss
+                    cm.ble.stopScan()
+                    cm.ble.disconnect()
+                    onComplete?()
+                    dismiss()
+                })
+                .navigationBarBackButtonHidden(true)
             }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
+                        // Clean up and dismiss
+                        cm.ble.stopScan()
+                        cm.ble.disconnect()
                         onComplete?()
                         dismiss()
                     }
