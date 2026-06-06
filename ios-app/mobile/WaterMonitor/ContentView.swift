@@ -50,13 +50,39 @@ struct ContentView: View {
     }
 
     private var splashView: some View {
-        VStack(spacing: 20) {
-            Image("Logo")
-                .resizable()
-                .scaledToFit()
-                .frame(maxWidth: 300)
-            Text("Water Monitor")
-                .font(.title.bold())
+        ZStack {
+            // Gradient background matching the logo
+            LinearGradient(
+                colors: [
+                    Color(red: 0.22, green: 0.42, blue: 0.82), // Deep blue
+                    Color(red: 0.31, green: 0.71, blue: 0.93)  // Cyan blue
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+            
+            VStack(spacing: 30) {
+                // Zenovaa logo icon
+                Image("ZenovaaLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 120, height: 120)
+                    .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 5)
+                
+                VStack(spacing: 8) {
+                    // Company name
+                    Text("Zenovaa")
+                        .font(.system(size: 48, weight: .bold, design: .serif))
+                        .foregroundStyle(.white)
+                    
+                    // Product name
+                    Text("CONNECT")
+                        .font(.system(size: 24, weight: .medium, design: .default))
+                        .tracking(8)
+                        .foregroundStyle(Color(red: 0.7, green: 0.9, blue: 1.0))
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

@@ -215,11 +215,13 @@ static float kalmanUpdate(float measurement) {
 
         // Normal rejection: grow uncertainty so threshold widens next time
         kfP = P_pred + KF_Q;   // extra Q to speed up uncertainty growth
-        Serial.printf("[Sensor] Spike rejected: %.1f cm "
-                      "(est=%.1f  ±%.1f cm  streak=%d)\n",
-                      measurement, kfState, threshold, kfRejects);
+        Serial.printf("[Sensor KF DEBUG] REJECTED: meas=%.1f est=%.1f innov=%.1f σ=%.1f thresh=%.1f streak=%d\n",
+                      measurement, kfState, innovation, sigma, threshold, kfRejects);
         return -1.0f;
     }
+
+    Serial.printf("[Sensor KF DEBUG] ACCEPTED: meas=%.1f innov=%.1f σ=%.1f (streak reset)\n",
+                  measurement, innovation, sigma);
 
     // ── Update step (measurement accepted) ───────────────────────────────────
     float K   = P_pred / S;                   // Kalman gain: 0 = ignore measurement, 1 = trust it fully
@@ -235,9 +237,11 @@ static float kalmanUpdate(float measurement) {
 float readDistanceCM() {
     // Step 1: multi-sample median — removes single-pulse hardware noise
     float buf[READINGS_N];
+    float rawReadings[READINGS_N];  // Debug: store all attempts including failures
     int   valid = 0;
     for (int i = 0; i < READINGS_N; i++) {
         float d = takeOnePulse();
+        rawReadings[i] = d;
         if (d >= 20.0f && d <= 600.0f) buf[valid++] = d;
         if (i < READINGS_N - 1) delay(READING_DELAY_MS);
     }
@@ -245,13 +249,20 @@ float readDistanceCM() {
         // Not enough valid pulses — sensor may be disconnected or pins wrong
         static unsigned long lastWarn = 0;
         if (millis() - lastWarn > 10000) {  // Log warning once per 10s to avoid spam
-            Serial.printf("[Sensor] WARNING: Only %d/%d valid pulses. Check sensor connection and pins (TRIG=D2, ECHO=D1)\n", valid, READINGS_N);
+            Serial.printf("[Sensor] WARNING: Only %d/%d valid pulses\n", valid, READINGS_N);
+            Serial.printf("[Sensor DEBUG] Raw measurements: %.1f, %.1f, %.1f, %.1f, %.1f cm\n",
+                          rawReadings[0], rawReadings[1], rawReadings[2], rawReadings[3], rawReadings[4]);
+            Serial.printf("[Sensor DEBUG] Valid readings: ");
+            for (int i = 0; i < valid; i++) Serial.printf("%.1f ", buf[i]);
+            Serial.println("cm");
             lastWarn = millis();
         }
         return -1.0f;
     }
 
     float median = sortedMedian(buf, valid);
+    Serial.printf("[Sensor DEBUG] Raw: [%.1f, %.1f, %.1f, %.1f, %.1f] → Median: %.1f cm (%d valid)\n",
+                  rawReadings[0], rawReadings[1], rawReadings[2], rawReadings[3], rawReadings[4], median, valid);
 
     // In test mode: return raw median for true real-time readings without filtering delays
     if (config.d.testing_mode) {
