@@ -133,6 +133,15 @@ void QueueStore::clear() {
     _count   = 0;
     _pending = 0;
     _saveMeta();
+
+    // Delete the persistent queue file to ensure true factory reset
+    if (LittleFS.exists(FILE_PATH)) {
+        LittleFS.remove(FILE_PATH);
+        Serial.println("[Queue] Deleted persistent queue file (/q.bin)");
+    }
+
+    // Recreate empty queue file
+    _ensureFile();
 }
 
 // ─────────────────────────────────────────────────────────────
