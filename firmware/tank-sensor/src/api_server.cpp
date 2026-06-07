@@ -289,7 +289,13 @@ void ApiServer::_setupRest() {
             if (isFactoryReset) {
                 Serial.println("[API] Factory reset requested — clearing NVS and queue...");
                 // Clear all NVS data
-                nvs_flash_erase();
+                esp_err_t err = nvs_flash_erase();
+                if (err != ESP_OK) {
+                    Serial.printf("[API] ERROR: nvs_flash_erase() failed with code %d\n", err);
+                    req->send(500, "application/json",
+                              "{\"ok\":false,\"error\":\"nvs_erase_failed\",\"detail\":\"flash operation failed\"}");
+                    return;
+                }
                 // Clear queue
                 queueStore.clear();
                 delay(500);
