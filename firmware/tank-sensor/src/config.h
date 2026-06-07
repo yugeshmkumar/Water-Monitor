@@ -13,6 +13,7 @@ struct DeviceConfig {
     uint16_t poll_interval_s      = 30;    // Normal polling: 15s–15min (default 30s)
     bool     testing_mode         = false; // When true, use test_poll_interval_s instead
     uint8_t  test_poll_interval_s = 3;    // Test polling: 1s–10s (default 3s)
+    bool     watchdog_enabled     = true;  // Hardware watchdog (auto-restart on hang) — disable for development
     char     pin_trig[4]          = "D2";
     char     pin_echo[4]          = "D1";
     char     node_id[32]          = "sensor-a";

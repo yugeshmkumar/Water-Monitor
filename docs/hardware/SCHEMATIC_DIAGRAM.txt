@@ -1,0 +1,332 @@
+# Water Monitor Phase 1B — Schematic Diagram (ASCII)
+# SR04M-2 Triggered UART Sensor with Rev G Protection
+
+## SHEET 1: POWER DISTRIBUTION & SOFT-START
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     GX12 Power Connector (J1)                   │
+│                                                                 │
+│  ┌─────────────────┐                                           │
+│  │  J1 GX12        │                                           │
+│  │ ┌─ Pin 1: +5V ──┐────────────────────┐                     │
+│  │ └─ Pin 2: GND ──┘        ↓           │                     │
+│  └─────────────────┘   [Polyfuse F1]    │                     │
+│                        TRA110 1.1A      │                     │
+│                        30V              │                     │
+│                             │           │                     │
+└─────────────────────────────┼───────────┼─────────────────────┘
+                              │           │
+                    ┌─────────┴───────────┘
+                    │
+                    ▼
+            ┌──────────────────┐
+            │ D1: SMBJ5V0A TVS │
+            │ Reverse-Polarity │
+            │ 600W, 5.8V Vwm   │
+            │ SMB Package      │
+            └─┬────────────────┘
+              │ (Anode to +5V)
+              │ (Cathode to GND)
+              │
+              ├─→ [GND STAR POINT] ←─ CRITICAL
+              │
+        ┌─────┴─────────────────────┐
+        │                           │
+    [+5V Rail]                 [GND Rail]
+        │                           │
+        ├─ D2 1N5819 ─────→ Schottky diode (back-feed)
+        │    (Anode to +5V)         │
+        │    (Cathode to GND)       │
+        │                           │
+        ├─ C1 (680µF/16V) ──┬──────┤
+        │  Bulk Energy Stor.│       │
+        │                   │       │
+        ├─ C2 (100µF/16V)──┤       │
+        │ Mid-Range Decoup. │       │
+        │                   │       │
+        ├─ C3 (100µF/16V)──┤       │
+        │                   │       │
+        ├─ C4 (100nF) ─────┤       │
+        │ HF Bypass 1       │       │
+        │                   │       │
+        ├─ C5 (100nF) ─────┤       │
+        │ HF Bypass 2       │       │
+        │                   │       │
+        ├─ C6 (100nF) ─────┤       │
+        │ HF Bypass 3       │       │
+        │                   │       │
+        ├─────┬─────────────┘       │
+        │     │                     │
+        │     └──────┬──────────────┘
+        │            │
+        ▼ (+5V)      ▼ (GND)
+    ┌─────────────────────┐
+    │   Soft-Start RC     │
+    │                     │
+    │  Q1: AO3401A       │
+    │  P-FET SO-23       │
+    │  Source → +5V      │
+    │  Drain → Sensor    │
+    │  Gate ← R5 (100k)  │
+    │  Body Diode for    │
+    │  back-feed to GND  │
+    └─┬──────────────┬───┘
+      │              │
+      │ (to Sensor)  └─ R5 (100kΩ)
+      │              Pull-up resistor
+      │              │
+      └──────────────┴──→ GND
+```
+
+---
+
+## SHEET 2: SENSOR INTERFACE (UART) & MICROCONTROLLER
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│           M12 4-Pin Sensor Connector (J2)                    │
+│                                                              │
+│  ┌──────────────────┐                                       │
+│  │  J2 M12          │                                       │
+│  │ ┌─ Pin 1: +5V ──┐────────────→ Sensor +5V (from Q1)    │
+│  │ │                │                                       │
+│  │ │ Pin 2: GND ───┐────────────→ Sensor GND (star point)  │
+│  │ │                │                                       │
+│  │ │ Pin 3: RX ────┐────────────→ Sensor RX (data return)  │
+│  │ │                │                                       │
+│  │ │ Pin 4: TX ────┐────────────→ Sensor TX (trigger)      │
+│  │ └                │                                       │
+│  └──────────────────┘                                       │
+│         │                                                    │
+└─────────┼────────────────────────────────────────────────────┘
+          │
+          │
+    ┌─────┼─────────────────────────────────┐
+    │     │                                 │
+    │  [Ferrite Bead FB]                    │ (from GPIO20)
+    │  1kΩ @ 100MHz                         │
+    │  UART Isolation                       │
+    │     │                                 │
+    │     └── [R2: 100Ω] ───→ GPIO20_RX    │
+    │         Series Protection             │
+    │                                       │
+    └───────────────────────────────────────┤
+                                            │
+              ┌─────────────────────────────┴──────┐
+              │                                    │
+              │    VOLTAGE DIVIDER                 │
+              │    (5V → 3.3V conversion)         │
+              │                                    │
+        ┌─────┴──────┐                            │
+        │  GPIO21_TX │ (from XIAO)                │
+        │ (3.3V out) │                            │
+        │     │      │                            │
+        │  [R1: 100Ω]───→ Divider Input          │
+        │     │      │                            │
+        │     │    ┌─┴──┐                        │
+        │     │    │ R3 │                        │
+        │     │    │10kΩ│ Upper Leg              │
+        │     │    └┬───┘                        │
+        │     │     │                            │
+        │     │     ├─→ J2.4 (Sensor TX)        │
+        │     │     │                            │
+        │     │    ┌┴───┐                        │
+        │     │    │ R4 │                        │
+        │     │    │20kΩ│ Lower Leg              │
+        │     │    └┬───┘                        │
+        │     │     │                            │
+        └─────┼─────┴──────→ GND (Divider Base) │
+              │                                   │
+              │                                   │
+              └───────────────────────────────────┘
+                       │
+                  ┌────┴────────────┐
+                  │                 │
+            ┌─────▼─────┐      ┌────▼─────┐
+            │   XIAO    │      │   XIAO   │
+            │ESP32-C6   │      │ Connected│
+            │           │      │ to:      │
+            │ GPIO21 ───┤──→ Sensor TX   │
+            │ GPIO20 ←──┤─── Sensor RX   │
+            │ GPIO8  ───┤──→ Reset SW1   │
+            │ VCC    ───┤──→ +5V Rail    │
+            │ GND    ───┤──→ GND Star    │
+            │           │                │
+            │ WiFi6     │      Baud:     │
+            │ BLE5      │      9600 bps  │
+            │ Zigbee    │                │
+            └─┬─────────┘      ┌─────────┘
+              │                │
+              │                │
+        ┌─────┴────────────────┴────┐
+        │   Reset Button (SW1)       │
+        │   Tactile 6mm              │
+        │   Normal: Open             │
+        │   Press: GPIO8 to GND      │
+        └────────────────────────────┘
+```
+
+---
+
+## COMPLETE SIGNAL FLOW DIAGRAM
+
+```
+                ┌──────────────────────────────────────────┐
+                │         EXTERNAL 5V/2A ADAPTER           │
+                └───────────────────┬──────────────────────┘
+                                    │
+                            GX12 Connector (J1)
+                                    │
+                    ┌───────────────┴──────────────┐
+                    │                              │
+            ┌───────▼────────┐          ┌─────────▼────────┐
+            │  Polyfuse F1   │          │   TVS D1 (Reverse │
+            │  (TRA110)      │          │   Polarity Protect)
+            │  1.1A hold     │          │   SMBJ5V0A        │
+            └───────┬────────┘          └─────────┬─────────┘
+                    │                             │
+        ┌───────────┴─────────────────────────────┴────────┐
+        │                                                   │
+        │                  +5V RAIL                        │
+        │                                                   │
+    ┌───┴──────┬───────────┬──────────┬────────┬──────────┴───┐
+    │           │           │          │        │              │
+   [C1]        [C2]        [C3]       [FB]    [Q1]        [J2.1]
+   680µF       100µF       100µF      Ferrite Source       Sensor
+                                      Bead               +5V
+   ┌──────────┬──────────┬──────────┬────────┬──────────┬────────┐
+   │  [C4]    │  [C5]    │  [C6]    │ [D2]   │ [R5]     │ [U1]   │
+   │ 100nF    │ 100nF    │ 100nF    │1N5819 │100kΩ    │ XIAO   │
+   │ HF       │ HF       │ HF       │Schott.│Pull-up  │ VCC    │
+   │ Bypass   │ Bypass   │ Bypass   │Diode  │(to Gate)│ Input  │
+   │          │          │          │       │         │        │
+   └──────────┴──────────┴──────────┴───┬───┴─────┬────┴────────┘
+                                        │         │
+                                       GND      GPIO21 (TX)
+                                        │         │
+              ┌─────────────────────────┴────┬────┴────────────┐
+              │      GND STAR POINT          │                 │
+              │      (CRITICAL)              │                 │
+              │                              │                 │
+        ┌─────┴─────────┐           ┌────────┴────────┐        │
+        │   J1.2        │           │    Voltage      │        │
+        │   (Power GND) │           │    Divider      │        │
+        │               │           │    (5V→3.3V)    │        │
+        │   J2.2        │     [R1:100Ω]─┬──[R3:10kΩ]  │        │
+        │   (Sensor)    │        (Series)├──[R4:20kΩ]─┼─→GPIO20│
+        │               │              │     (Lower)   │        │
+        │   Q1.G        │              │               │        │
+        │   (FET Gate)  │              ├──→ J2.4      │        │
+        │               │              │  (To Sensor) │        │
+        │   Decap.      │              │               │        │
+        │   Grounds     │              ▼               │        │
+        │               │          ┌─────────┐        │        │
+        │   U1.GND      │          │Ferrite  │        │        │
+        │   (XIAO)      │          │Bead (FB)│        │        │
+        │               │          │1kΩ      │        │        │
+        │   SW1.2       │          └────┬────┘        │        │
+        │   (Button)    │               │             │        │
+        │               │            ┌──┴──┐          │        │
+        │               │            │R2   │          │        │
+        │               │            │100Ω │          │        │
+        │               │            └──┬──┘          │        │
+        │               │               │             │        │
+        │               │               └──→ J2.3     │        │
+        │               │                  (Sensor RX)│        │
+        │               │                             │        │
+        └───────────────┴─────────────────────────────┴────────┘
+                │
+                ▼
+              EARTH GROUND
+              (All return paths)
+```
+
+---
+
+## COMPONENT PLACEMENT GUIDELINES
+
+### Layer 1 (Top)
+```
+┌───────────────────────────────────────────┐
+│    IP65 Enclosure (100×70×50mm)           │
+│                                           │
+│  ┌──────────┐          ┌──────────┐      │
+│  │   GX12   │          │   M12    │      │
+│  │ (Power)  │          │ (Sensor) │      │
+│  │  Left    │          │  Right   │      │
+│  └────┬─────┘          └────┬─────┘      │
+│       │                     │            │
+│  ┌────┴──────────────────┬──┴────────┐   │
+│  │ Power Distribution    │ Sensor IF │   │
+│  │ (F1, D1, D2, C1)     │ (FB, R1-4)│   │
+│  │ ~Left 1/3 of PCB     │ ~Right1/3 │   │
+│  └────┬──────────────────┴──┬────────┘   │
+│       │                     │            │
+│  ┌────┴─────────────────────┴───────┐    │
+│  │  XIAO ESP32-C6 (center-top)       │   │
+│  │  WiFi antenna facing up           │   │
+│  └────┬──────────────────────────────┘   │
+│       │                                  │
+│  ┌────┴───────────────────────────────┐  │
+│  │  Reset Button (bottom-center)      │  │
+│  │  SW1 (easy access)                 │  │
+│  └────────────────────────────────────┘  │
+│                                           │
+└───────────────────────────────────────────┘
+```
+
+### Layer 2 (Bottom / Ground Plane)
+- Continuous ground plane (as much as possible)
+- Power return paths from +5V rail back to GX12 GND pin
+- Via stitching around edges (every 2-3cm) for EMI containment
+- Star ground point clearly marked and via-stitched to bottom plane
+
+---
+
+## KEY ELECTRICAL CHARACTERISTICS
+
+### Soft-Start Current Limiting
+- Polyfuse F1: Holds at 1.1A, trips at 1.35A
+- P-FET Q1: RDSon = 50mΩ, turns on slowly via R5
+- Inrush: < 1A over first ~100ms (soft ramp, not hard click)
+
+### Voltage Divider (5V → 3.3V)
+- R3 + R4 creates 1.67V from 5V input when terminated with GPIO20 input
+- Actually: V_out = 5V × 20k/(10k+20k) = 3.33V ≈ max GPIO rating
+- Impedance: R_th = 10k || 20k = 6.67kΩ (very low loading on GPIO20)
+
+### Decoupling Network Impedance
+- Target: < 100 mΩ @ 100kHz
+- C1 (680µF): Dominates DC-10Hz, ESR ≈ 30mΩ
+- C2, C3 (100µF): Provide 10-100Hz, ESR ≈ 20mΩ each
+- C4, C5, C6 (100nF): Handle 100Hz-1GHz, ESR ≈ 5mΩ each
+- Total: Cascaded impedance provides smooth response across all frequencies
+
+### Ferrite Bead Effectiveness
+- 1kΩ @ 100MHz means:
+  - @ 10MHz: ~300Ω impedance (still good isolation)
+  - @ 1MHz: ~100Ω impedance (some attenuation)
+  - @ 100kHz: < 50Ω impedance (minimal effect)
+- Optimized for 40 kHz sensor harmonics (2nd harmonic at 80 kHz)
+
+---
+
+## SIGNAL INTEGRITY VERIFICATION
+
+### Voltage Levels (Operating)
+- +5V rail: 4.75V – 5.25V (under load with polyfuse)
+- GPIO21 (ESP32 output): 3.0V – 3.6V (logic high)
+- GPIO20 divider input (5V sensor): 3.0V – 5.5V (depends on sensor)
+- GPIO20 (ESP32 input): 0.0V – 3.3V max (safe after divider)
+
+### Timing
+- UART baud: 9600 bps = 104 µs per bit
+- Frame time: 4 bytes = ~4.3 ms reception
+- Sensor response latency: 0-120 ms (specified in SR04M-2 datasheet)
+- Polling interval: 5 seconds (firmware configured)
+
+---
+
+**Status:** Schematic complete and ready for KiCad entry
+**Next:** Generate KiCad netlist and begin PCB layout (Phase 1B-2)

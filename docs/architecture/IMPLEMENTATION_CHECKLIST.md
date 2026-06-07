@@ -213,7 +213,19 @@ if (abs(new_temp - g_temp_c) > 2.0f) {  // >2°C change only
 - [x] Sensor selection rationale (SENSOR_SELECTION_RATIONALE.md)
 - [x] Memory updated with findings
 
-### ⏳ Phase 1B: Pre-Layout (BEFORE PCB DESIGN)
+### ⏳ Phase 1B: Detailed Implementation Plan (READY TO EXECUTE)
+
+**Reference:** [PHASE_1B_IMPLEMENTATION_PLAN.md](PHASE_1B_IMPLEMENTATION_PLAN.md) — Complete roadmap covering:
+- PCB Layout Strategy (constraints, component placement, PDN, routing)
+- GPIO Pin Assignment (SR04M-2 UART on GPIO20/21)
+- Firmware Architecture (sensor.cpp refactoring, UART initialization, temporal filtering)
+- Testing & Validation Plan (unit tests, integration tests, field deployment checklist)
+
+**Timeline:** 3-4 weeks (parallel with component transit)
+
+**Status:** ✅ **READY TO EXECUTE**
+
+### ⏳ Phase 1B-1: PCB Design & Schematic (Week 1 - BEFORE PCB DESIGN)
 
 - [ ] Replace TVS: P6KE6.8A → SMBJ5V0A in schematic
 - [ ] Update BOM with SMBJ5V0A + 1000 Ω ferrite bead part numbers

@@ -187,6 +187,66 @@ void ApiServer::_setupRest() {
                       ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"parse_error\"}");
         }));
 
+    // GET /api/diagnostics — comprehensive system diagnostics
+    _http.on("/api/diagnostics", HTTP_GET, [](AsyncWebServerRequest* req) {
+        DeviceState snap;
+        if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(50))) {
+            snap = gState;
+            xSemaphoreGive(gStateMutex);
+        }
+
+        SensorDiag sensorDiag = getSensorDiagnostics();
+
+        // Calculate memory stats
+        uint32_t heapFree = ESP.getFreeHeap();
+        uint32_t heapTotal = ESP.getHeapSize();
+        uint32_t psramFree = ESP.getFreePsram();
+
+        // Build comprehensive diagnostics JSON
+        JsonDocument doc;
+
+        // Sensor diagnostics
+        JsonObject sensor = doc["sensor"].to<JsonObject>();
+        sensor["reads"] = sensorDiag.readCount;
+        sensor["frame_errors"] = sensorDiag.frameErrorCount;
+        sensor["timeouts"] = sensorDiag.timeoutCount;
+        sensor["last_raw_cm"] = sensorDiag.lastRawDist;
+        sensor["last_filtered_cm"] = sensorDiag.lastFilteredDist;
+        sensor["error_rate_%"] = sensorDiag.readCount > 0
+            ? (float)(sensorDiag.frameErrorCount + sensorDiag.timeoutCount) / sensorDiag.readCount * 100.0f
+            : 0.0f;
+
+        // WiFi diagnostics
+        JsonObject wifi = doc["wifi"].to<JsonObject>();
+        wifi["connected"] = snap.wifi_ok;
+        wifi["rssi_dbm"] = snap.wifi_rssi;
+        wifi["ssid"] = String(config.d.wifi_ssid);
+
+        // Queue diagnostics
+        JsonObject queue = doc["queue"].to<JsonObject>();
+        queue["pending"] = snap.queue_depth;
+
+        // System diagnostics
+        JsonObject system = doc["system"].to<JsonObject>();
+        system["uptime_s"] = millis() / 1000;
+        system["heap_free"] = heapFree;
+        system["heap_total"] = heapTotal;
+        system["heap_used_%"] = heapTotal > 0 ? (float)(heapTotal - heapFree) / heapTotal * 100.0f : 0.0f;
+        system["psram_free"] = psramFree;
+        system["fw_version"] = String(config.d.firmware_version);
+
+        // Configuration state
+        JsonObject config_state = doc["config"].to<JsonObject>();
+        config_state["tank_empty_cm"] = config.d.tank_empty_cm;
+        config_state["tank_full_cm"] = config.d.tank_full_cm;
+        config_state["poll_interval_s"] = config.d.poll_interval_s;
+        config_state["testing_mode"] = config.d.testing_mode;
+
+        String body;
+        serializeJson(doc, body);
+        req->send(200, "application/json", body);
+    });
+
     // POST /api/queue/flush — return up to 50 unsent entries
     _http.on("/api/queue/flush", HTTP_POST, [](AsyncWebServerRequest* req) {
         JsonDocument doc;

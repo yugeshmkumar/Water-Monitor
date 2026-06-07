@@ -1,0 +1,137 @@
+(kicad_sch (version 20230121)
+
+  (uuid "12345678-1234-5678-1234-567812345678")
+
+  (paper "A4")
+
+  (title_block
+    (title "Water Monitor Phase 1B — SR04M-2 Sensor Unit Rev G")
+    (date "2026-06-07")
+    (rev "G.1")
+    (company "Water Monitor Project")
+    (comment 1 "XIAO ESP32-C6 + SR04M-2 Triggered UART")
+    (comment 2 "Reverse-polarity protection + Soft-start + UART isolation")
+    (comment 3 "Offline-first WiFi, IP65 rated enclosure")
+    (comment 4 "Field deployment on urban roof")
+  )
+
+  (lib_symbols
+    (symbol "Connector_Generic:Conn_01x02_Pin"
+      (pin_numbers hide)
+      (pin_names (offset 1.016) hide)
+      (property "Reference" "J" (id 0 0) (at 0 2.54 0)
+        (effects (font (size 1.27 1.27) (thickness 0.15))))
+      (property "Value" "Conn_01x02_Pin" (id 1 0) (at 0 -5.08 0)
+        (effects (font (size 1.27 1.27) (thickness 0.15))))
+      (symbol "Conn_01x02_Pin_1_1"
+        (rectangle (start -1.27 -2.413) (end 0 -2.667)
+          (stroke (width 0.254)) (fill (color 0 0 0 0))))
+        (rectangle (start -1.27 0.127) (end 0 -0.127)
+          (stroke (width 0.254)) (fill (color 0 0 0 0))))
+        (rectangle (start -1.27 1.27) (end 1.27 -3.81)
+          (stroke (width 0.254)) (fill (color 0 0 0 0.15))))
+        (pin passive line (at -5.08 0 0) (length 3.81) (name "Pin_1" (effects (font (size 1.27 1.27) (thickness 0.15)))) (number "1" (effects (font (size 1.27 1.27) (thickness 0.15)))))
+        (pin passive line (at -5.08 -2.54 0) (length 3.81) (name "Pin_2" (effects (font (size 1.27 1.27) (thickness 0.15)))) (number "2" (effects (font (size 1.27 1.27) (thickness 0.15))))))))
+
+    (symbol "Device:R"
+      (pin_numbers hide)
+      (pin_names (offset 0))
+      (property "Reference" "R" (id 0 0) (at 2.032 0 90)
+        (effects (font (size 1.27 1.27) (thickness 0.15))))
+      (property "Value" "R" (id 1 0) (at 0 0 90)
+        (effects (font (size 1.27 1.27) (thickness 0.15))))
+      (symbol "R_0_1"
+        (rectangle (start -1.016 -2.54) (end 1.016 2.54)
+          (stroke (width 0.254)) (fill (color 0 0 0 0))))
+      (symbol "R_1_1"
+        (pin passive line (at 0 3.81 270) (length 1.27) (name "~" (effects (font (size 1.27 1.27) (thickness 0.15)))) (number "1" (effects (font (size 1.27 1.27) (thickness 0.15)))))
+        (pin passive line (at 0 -3.81 90) (length 1.27) (name "~" (effects (font (size 1.27 1.27) (thickness 0.15)))) (number "2" (effects (font (size 1.27 1.27) (thickness 0.15))))))))
+
+    (symbol "Device:C"
+      (pin_numbers hide)
+      (pin_names (offset 0.254))
+      (property "Reference" "C" (id 0 0) (at 0.635 2.54 0)
+        (effects (font (size 1.27 1.27) (thickness 0.15))))
+      (property "Value" "C" (id 1 0) (at 0.635 -2.54 0)
+        (effects (font (size 1.27 1.27) (thickness 0.15))))
+      (symbol "C_0_1"
+        (polyline (pts (xy -2.032 -0.762) (xy 2.032 -0.762)) (stroke (width 0.508)))
+        (polyline (pts (xy -2.032 0.762) (xy 2.032 0.762)) (stroke (width 0.508))))
+      (symbol "C_1_1"
+        (pin passive line (at 0 3.81 270) (length 3.048) (name "~" (effects (font (size 1.27 1.27) (thickness 0.15)))) (number "1" (effects (font (size 1.27 1.27) (thickness 0.15)))))
+        (pin passive line (at 0 -3.81 90) (length 3.048) (name "~" (effects (font (size 1.27 1.27) (thickness 0.15)))) (number "2" (effects (font (size 1.27 1.27) (thickness 0.15))))))))
+
+    (symbol "Device:D"
+      (pin_numbers hide)
+      (pin_names (offset 1.016))
+      (property "Reference" "D" (id 0 0) (at 0 2.54 0)
+        (effects (font (size 1.27 1.27) (thickness 0.15))))
+      (property "Value" "D" (id 1 0) (at 0 -2.54 0)
+        (effects (font (size 1.27 1.27) (thickness 0.15))))
+      (symbol "D_0_1"
+        (polyline (pts (xy -1.27 0) (xy -1.27 0)) (stroke (width 0)))
+        (polyline (pts (xy -1.27 0) (xy 1.27 0)) (stroke (width 0)))
+        (polyline (pts (xy 1.27 -1.27) (xy 1.27 1.27)) (stroke (width 0.254)))
+        (polyline (pts (xy -1.27 -1.27) (xy -1.27 1.27) (xy 1.27 0) (xy -1.27 -1.27)) (stroke (width 0.254)) (fill (color 0 0 0 0))))
+      (symbol "D_1_1"
+        (pin passive line (at -3.81 0 0) (length 2.54) (name "K" (effects (font (size 1.27 1.27) (thickness 0.15)))) (number "1" (effects (font (size 1.27 1.27) (thickness 0.15)))))
+        (pin passive line (at 3.81 0 180) (length 2.54) (name "A" (effects (font (size 1.27 1.27) (thickness 0.15)))) (number "2" (effects (font (size 1.27 1.27) (thickness 0.15))))))))
+
+    (symbol "Connector_Generic:Conn_01x04_Pin"
+      (pin_numbers hide)
+      (pin_names (offset 1.016) hide)
+      (property "Reference" "J" (id 0 0) (at 0 5.08 0)
+        (effects (font (size 1.27 1.27) (thickness 0.15))))
+      (property "Value" "Conn_01x04_Pin" (id 1 0) (at 0 -7.62 0)
+        (effects (font (size 1.27 1.27) (thickness 0.15))))
+      (symbol "Conn_01x04_Pin_1_1"
+        (rectangle (start -1.27 -7.493) (end 0 -7.747) (stroke (width 0.254)) (fill (color 0 0 0 0)))
+        (rectangle (start -1.27 -4.953) (end 0 -5.207) (stroke (width 0.254)) (fill (color 0 0 0 0)))
+        (rectangle (start -1.27 -2.413) (end 0 -2.667) (stroke (width 0.254)) (fill (color 0 0 0 0)))
+        (rectangle (start -1.27 0.127) (end 0 -0.127) (stroke (width 0.254)) (fill (color 0 0 0 0)))
+        (rectangle (start -1.27 1.27) (end 1.27 -8.89) (stroke (width 0.254)) (fill (color 0 0 0 0.15)))
+        (pin passive line (at -5.08 0 0) (length 3.81) (name "Pin_1" (effects (font (size 1.27 1.27) (thickness 0.15)))) (number "1" (effects (font (size 1.27 1.27) (thickness 0.15)))))
+        (pin passive line (at -5.08 -2.54 0) (length 3.81) (name "Pin_2" (effects (font (size 1.27 1.27) (thickness 0.15)))) (number "2" (effects (font (size 1.27 1.27) (thickness 0.15)))))
+        (pin passive line (at -5.08 -5.08 0) (length 3.81) (name "Pin_3" (effects (font (size 1.27 1.27) (thickness 0.15)))) (number "3" (effects (font (size 1.27 1.27) (thickness 0.15)))))
+        (pin passive line (at -5.08 -7.62 0) (length 3.81) (name "Pin_4" (effects (font (size 1.27 1.27) (thickness 0.15)))) (number "4" (effects (font (size 1.27 1.27) (thickness 0.15)))))))
+  )
+
+  (junction (at 50.8 50.8) (diameter 0) (color 0 0 0 0))
+
+  (wire (pts (xy 25.4 50.8) (xy 50.8 50.8)) (stroke (width 0)) (uuid "11111111-1111-1111-1111-111111111111"))
+  (wire (pts (xy 50.8 50.8) (xy 76.2 50.8)) (stroke (width 0)) (uuid "22222222-2222-2222-2222-222222222222"))
+  (wire (pts (xy 50.8 50.8) (xy 50.8 76.2)) (stroke (width 0)) (uuid "33333333-3333-3333-3333-333333333333"))
+
+  (no_connect (at 100 100) (uuid "44444444-4444-4444-4444-444444444444"))
+
+  (symbol (lib_id "Connector_Generic:Conn_01x02_Pin") (at 25.4 50.8 0)
+    (uuid "55555555-5555-5555-5555-555555555555")
+    (property "Reference" "J1" (id 0 0) (at 0 2.54 0) (effects (font (size 1.27 1.27) (thickness 0.15))))
+    (property "Value" "GX12_2pin" (id 1 0) (at 0 -5.08 0) (effects (font (size 1.27 1.27) (thickness 0.15))))
+    (pin "1" (uuid "66666666-6666-6666-6666-666666666666"))
+    (pin "2" (uuid "77777777-7777-7777-7777-777777777777")))
+
+  (symbol (lib_id "Device:R") (at 50.8 60.96 90)
+    (uuid "88888888-8888-8888-8888-888888888888")
+    (property "Reference" "F1" (id 0 0) (at 50.8 63.5 90) (effects (font (size 1.27 1.27) (thickness 0.15))))
+    (property "Value" "TRA110_1.1A" (id 1 0) (at 50.8 60.96 90) (effects (font (size 1.27 1.27) (thickness 0.15))))
+    (pin "1" (uuid "99999999-9999-9999-9999-999999999999"))
+    (pin "2" (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")))
+
+  (symbol (lib_id "Device:D") (at 76.2 50.8 90)
+    (uuid "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    (property "Reference" "D1" (id 0 0) (at 78.74 50.8 0) (effects (font (size 1.27 1.27) (thickness 0.15))))
+    (property "Value" "SMBJ5V0A" (id 1 0) (at 76.2 52.07 0) (effects (font (size 1.27 1.27) (thickness 0.15))))
+    (pin "1" (uuid "cccccccc-cccc-cccc-cccc-cccccccccccc"))
+    (pin "2" (uuid "dddddddd-dddd-dddd-dddd-dddddddddddd")))
+
+  (symbol (lib_id "Device:C") (at 50.8 76.2 0)
+    (uuid "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    (property "Reference" "C1" (id 0 0) (at 53.34 75.438 0) (effects (font (size 1.27 1.27) (thickness 0.15))))
+    (property "Value" "680µF/16V" (id 1 0) (at 53.34 77.216 0) (effects (font (size 1.27 1.27) (thickness 0.15))))
+    (pin "1" (uuid "ffffffff-ffff-ffff-ffff-ffffffffffff"))
+    (pin "2" (uuid "11111112-1111-1111-1111-111111111111")))
+
+  (sheet_instances
+    (path "/" (page "1")))
+)

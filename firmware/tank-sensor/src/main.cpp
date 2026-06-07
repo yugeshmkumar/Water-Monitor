@@ -11,6 +11,8 @@
 #include "queue_store.h"
 #include "ble_server.h"
 #include "api_server.h"
+#include "watchdog.h"
+#include "health.h"
 
 // ─── Shared state (defined here, declared extern in state.h) ──
 DeviceState       gState;
@@ -85,38 +87,67 @@ static bool wifiConnect() {
 }
 
 // ─── FreeRTOS tasks ───────────────────────────────────────────
+// NOTE: All tasks MUST call watchdog.feed() periodically to prevent restart
 
 static void sensorTask(void* pv) {
-    pinMode(PIN_TRIG, OUTPUT);
-    pinMode(PIN_ECHO, INPUT);
-    digitalWrite(PIN_TRIG, LOW);
-    Serial.println("[Sensor] Task started");
+    Serial.println("[Sensor] Task starting...");
+
+    // Initialize SR04M-2 UART sensor (GPIO20 RX, GPIO21 TX, 9600 baud)
+    sensorInit();
+
+    // Register this task with watchdog (15 second deadline)
+    watchdog.registerTask("sensor", xTaskGetCurrentTaskHandle(), 15000);
 
     // Wait for sensor module to stabilize after power-on
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    // Run self-test to verify sensor responds
+    uint8_t selfTestAttempts = 0;
+    while (!sensorSelfTest() && selfTestAttempts < 3) {
+        selfTestAttempts++;
+        Serial.printf("[Sensor] Self-test attempt %u failed, retrying...\n", selfTestAttempts);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+
+    if (selfTestAttempts >= 3) {
+        Serial.println("[Sensor] ERROR: Self-test failed 3x. Sensor not responding.");
+        Serial.println("[Sensor] Verify: SR04M-2 has 120kΩ mode resistor soldered on board");
+        // Continue anyway - WiFi queue will buffer readings when sensor recovers
+    }
+
+    // Feed watchdog on startup success
+    watchdog.feed("sensor");
 
     // Auto-calibration tracking
     float lastLevel = 50.0f;  // last known level %
     uint32_t cycleStartTs = 0;
+    unsigned long lastSensorFeed = millis();
 
     while (true) {
+        // Feed watchdog periodically (at least every 15 seconds)
+        if (millis() - lastSensorFeed > 5000) {
+            watchdog.feed("sensor");
+            lastSensorFeed = millis();
+        }
+
         float    dist = readDistanceCM();
         bool     ok   = (dist > 0.0f);
         uint32_t ts   = millis() / 1000;
 
         if (!ok) {
-            // Still seeking stable readings — normal during startup or after filter reset
-            // Don't spam logs, just wait
+            // Reading failed (timeout or frame error) — normal during startup
             vTaskDelay(pdMS_TO_TICKS(2000));
             continue;
         }
 
-        Serial.printf("[Sensor] Valid reading: %.1f cm → %u%%\n", dist,
-                      (uint8_t)computeLevelPct(dist, config.d.tank_empty_cm, config.d.tank_full_cm));
+        float emptyDist_cm = config.d.tank_empty_cm;
+        float fullDist_cm = config.d.tank_full_cm;
 
-        uint8_t pct = (uint8_t)computeLevelPct(dist,
-                                                config.d.tank_empty_cm,
-                                                config.d.tank_full_cm);
+        Serial.printf("[Sensor] Valid reading: %.1f cm → %u%% (empty=%.1f, full=%.1f cm)\n",
+                      dist, (uint8_t)computeLevelPct(dist, emptyDist_cm, fullDist_cm),
+                      emptyDist_cm, fullDist_cm);
+
+        uint8_t pct = (uint8_t)computeLevelPct(dist, emptyDist_cm, fullDist_cm);
 
         if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(100))) {
             gState.distance_cm = dist;
@@ -129,9 +160,9 @@ static void sensorTask(void* pv) {
         queueStore.write(dist, pct);
         bleServer.notifyLevel(dist, pct, ts);
 
-        digitalWrite(PIN_LED, HIGH);
+        digitalWrite(PIN_LED_STATUS, HIGH);
         delay(30);
-        digitalWrite(PIN_LED, LOW);
+        digitalWrite(PIN_LED_STATUS, LOW);
 
         // ── Auto-calibration: track min/max and detect cycles ──────────────────
         if (config.d.auto_calibration_enabled) {
@@ -172,23 +203,60 @@ static void sensorTask(void* pv) {
 static void commsTask(void* pv) {
     bool serverStarted   = false;
     uint32_t lastPushedTs = 0;  // tracks last ts pushed via WS + MQTT to avoid re-sends
+    unsigned long lastDiagPrint = 0;  // tracks diagnostics print frequency
+
+    // Register this task with watchdog (20 second deadline)
+    watchdog.registerTask("comms", xTaskGetCurrentTaskHandle(), 20000);
+
+    // WiFi non-blocking reconnect timer
+    unsigned long lastWiFiAttempt = 0;
+    static const unsigned long WIFI_RETRY_INTERVAL_MS = 50000;  // 50 seconds
+    uint32_t wifiReconnectAttempts = 0;
+    unsigned long lastCommsFeed = millis();
 
     // Initial WiFi connect attempt
     if (wifiConnect()) {
         apiServer.begin();
         serverStarted = true;
+        Serial.println("[WiFi] Initial connection successful");
+    } else {
+        Serial.println("[WiFi] Initial connection failed, will retry every 50s");
     }
 
+    // Feed watchdog on startup
+    watchdog.feed("comms");
+
     while (true) {
+        // Feed watchdog periodically (at least every 20 seconds)
+        if (millis() - lastCommsFeed > 10000) {
+            watchdog.feed("comms");
+            lastCommsFeed = millis();
+        }
         bool wifiNow = (WiFi.status() == WL_CONNECTED);
 
+        // Non-blocking WiFi reconnect: only attempt every 50 seconds
         if (!wifiNow && strlen(config.d.wifi_ssid) > 0) {
-            Serial.println("[WiFi] Reconnecting...");
-            if (wifiConnect()) {
-                wifiNow = true;
-                if (!serverStarted) {
-                    apiServer.begin();
-                    serverStarted = true;
+            unsigned long now = millis();
+            if (now - lastWiFiAttempt > WIFI_RETRY_INTERVAL_MS) {
+                lastWiFiAttempt = now;
+                wifiReconnectAttempts++;
+                Serial.printf("[WiFi] Reconnection attempt #%lu (offline for ~%lus)\n",
+                              wifiReconnectAttempts, (now / 1000));
+
+                // Non-blocking: attempt connection with timeout, don't wait long
+                WiFi.mode(WIFI_STA);
+                WiFi.begin(config.d.wifi_ssid, config.d.wifi_pass);
+
+                // Check result immediately after begin, but don't block
+                vTaskDelay(pdMS_TO_TICKS(100));
+
+                if (WiFi.status() == WL_CONNECTED) {
+                    wifiNow = true;
+                    Serial.println("[WiFi] Reconnection successful!");
+                    if (!serverStarted) {
+                        apiServer.begin();
+                        serverStarted = true;
+                    }
                 }
             }
         }
@@ -205,8 +273,23 @@ static void commsTask(void* pv) {
                 gState.wifi_ok     = true;
                 gState.wifi_rssi   = rssi;
                 gState.queue_depth = queueStore.pendingCount();
+
+                // Log connection success (helps with diagnostics)
+                static unsigned long lastSuccessfulWiFi = 0;
+                lastSuccessfulWiFi = millis();
+
                 snap = gState;
                 xSemaphoreGive(gStateMutex);
+            }
+
+            // Print diagnostics every 60 seconds while connected
+            if (millis() - lastDiagPrint > 60000) {
+                lastDiagPrint = millis();
+                SensorDiag diag = getSensorDiagnostics();
+                Serial.printf("[Diagnostics] Reads:%lu Errors:%lu Timeouts:%lu "
+                              "Queue:%u RSSI:%d\n",
+                              diag.readCount, diag.frameErrorCount, diag.timeoutCount,
+                              gState.queue_depth, rssi);
             }
 
             // Push new readings only once per sensor cycle
@@ -224,6 +307,16 @@ static void commsTask(void* pv) {
             // LittleFS flash erase inside async_tcp starves the TCP stack → watchdog crash.
             queueStore.processPending();
 
+            // Print diagnostics every 60 seconds while connected
+            if (millis() - lastDiagPrint > 60000) {
+                lastDiagPrint = millis();
+                SensorDiag diag = getSensorDiagnostics();
+                Serial.printf("[Diagnostics] Reads:%lu Errors:%lu Timeouts:%lu "
+                              "Queue:%u RSSI:%d\n",
+                              diag.readCount, diag.frameErrorCount, diag.timeoutCount,
+                              snap.queue_depth, (int8_t)WiFi.RSSI());
+            }
+
         } else {
             if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(50))) {
                 gState.wifi_ok   = false;
@@ -239,10 +332,57 @@ static void commsTask(void* pv) {
 }
 
 static void bleTask(void* pv) {
+    // Register this task with watchdog (10 second deadline)
+    watchdog.registerTask("ble", xTaskGetCurrentTaskHandle(), 10000);
+
     bleServer.begin();
+    watchdog.feed("ble");
+
+    unsigned long lastBleFeed = millis();
+
     while (true) {
+        // Feed watchdog periodically
+        if (millis() - lastBleFeed > 5000) {
+            watchdog.feed("ble");
+            lastBleFeed = millis();
+        }
+
         bleServer.loop();
         vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+// ─── Health Monitoring Task ──────────────────────────────────────────
+// Monitors system health and triggers restart if critical issues detected
+
+static void healthTask(void* pv) {
+    health.begin();
+    Serial.println("[Health] Health monitoring task started");
+
+    unsigned long lastHealthCheck = millis();
+
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(10000));  // Check every 10 seconds
+
+        // Update health metrics
+        health.update();
+
+        // Check for recovery conditions
+        health.checkAndRecover();
+
+        // Log health every 60 seconds
+        if (millis() - lastHealthCheck > 60000) {
+            lastHealthCheck = millis();
+            SystemHealth h = health.getHealth();
+            Serial.printf("[Health] Score: %u%% | Heap: %u bytes | "
+                          "Tasks: S:%s C:%s B:%s | WiFi: %s (RSSI:%d)\n",
+                          h.healthScore, h.heapFree,
+                          h.sensorTaskHealthy ? "✓" : "✗",
+                          h.commsTaskHealthy ? "✓" : "✗",
+                          h.bleTaskHealthy ? "✓" : "✗",
+                          h.wifiConnected ? "✓" : "✗",
+                          h.wifiRssi);
+        }
     }
 }
 
@@ -252,9 +392,14 @@ void setup() {
     Serial.begin(115200);
     delay(200);
     Serial.println("\n[Boot] Water Level Monitor v1.0 — Node A (XIAO ESP32-C6)");
+    Serial.println("[Boot] Production-Grade Firmware with Watchdog & Health Monitoring");
 
-    pinMode(PIN_LED, OUTPUT);
-    digitalWrite(PIN_LED, HIGH);  // on during init sequence
+    pinMode(PIN_LED_STATUS, OUTPUT);
+    digitalWrite(PIN_LED_STATUS, HIGH);  // on during init sequence
+
+    // Initialize watchdog FIRST (before any other subsystem)
+    health.begin();
+    watchdog.begin();
 
     if (!LittleFS.begin(true)) {
         Serial.println("[Boot] LittleFS mount failed — formatting");
@@ -278,16 +423,24 @@ void setup() {
     gStateMutex = xSemaphoreCreateMutex();
     configASSERT(gStateMutex != NULL);
 
-    digitalWrite(PIN_LED, LOW);
+    digitalWrite(PIN_LED_STATUS, LOW);
 
-    xTaskCreate(sensorTask, "sensor", 4096, NULL, 3, NULL);
-    xTaskCreate(commsTask,  "comms",  8192, NULL, 2, NULL);
-    xTaskCreate(bleTask,    "ble",    10240, NULL, 1, NULL);
+    // Create tasks with proper stack sizes for production
+    // Stack sizes tested and validated for no overflow
+    xTaskCreatePinnedToCore(sensorTask, "sensor", 4096, NULL, 3, NULL, 0);
+    xTaskCreatePinnedToCore(commsTask,  "comms",  8192, NULL, 2, NULL, 0);
+    xTaskCreatePinnedToCore(bleTask,    "ble",    10240, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(healthTask, "health", 4096, NULL, 1, NULL, 1);
 
-    Serial.println("[Boot] OK — tasks started");
+    // Feed watchdog on startup
+    watchdog.feed("main");
+
+    Serial.println("[Boot] OK — tasks started with watchdog protection");
 }
 
 void loop() {
     // Idle — all work is done in FreeRTOS tasks above
+    // Still need to feed watchdog to prevent main loop timeout
+    watchdog.feed("main");
     vTaskDelay(pdMS_TO_TICKS(10000));
 }

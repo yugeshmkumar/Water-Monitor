@@ -1,0 +1,217 @@
+# Water Monitor Phase 1B — Schematic Netlist
+# Date: 2026-06-07
+# Design: Rev G — SR04M-2 Triggered UART Sensor
+# Status: Ready for KiCad Import
+
+## COMPONENT REFERENCE LIST
+
+### Power Distribution Section
+J1          GX12            2-pin power connector (5V input)
+F1          TRA110          Polyfuse 30V 1.1A (soft-start)
+D1          SMBJ5V0A        TVS 5V (reverse-polarity protection)
+D2          1N5819          Schottky diode (back-feed isolation)
+Q1          AO3401A         P-FET SO-23 (soft-start control)
+R5          100kΩ           Gate pull-up resistor (1/4W 5%)
+C1          680µF/16V       Bulk energy storage (radial)
+C2          100µF/16V       Mid-range decoupling (radial)
+C3          100µF/16V       Mid-range decoupling (radial)
+C4          100nF           HF bypass ceramic (0603)
+C5          100nF           HF bypass ceramic (0603)
+C6          100nF           HF bypass ceramic (0603)
+
+### Sensor Interface Section (UART)
+J2          M12-4PIN        4-pin sensor connector
+FB          1kΩ@100MHz      Ferrite bead (UART isolation)
+R1          100Ω            TX series protection (1/4W 5%)
+R2          100Ω            RX series protection (1/4W 5%)
+R3          10kΩ            TX voltage divider lower leg (1/4W 5%)
+R4          20kΩ            TX voltage divider upper leg (1/4W 5%)
+
+### Microcontroller Section
+U1          XIAO ESP32-C6   RISC-V 32-bit, WiFi6/BLE5/Zigbee
+SW1         TACTILE          Reset/Config button (6mm)
+
+---
+
+## NET LIST
+
+### Power Nets
+NET: +5V_IN
+  J1.1 (power input)
+  → F1.1 (polyfuse input)
+
+NET: +5V
+  F1.2 (polyfuse output)
+  → D1.A (TVS anode)
+  → C1.+ (bulk cap positive)
+  → C2.+ (decoupling cap 1)
+  → C3.+ (decoupling cap 2)
+  → Q1.S (P-FET source)
+  → J2.1 (sensor +5V)
+  → U1.5V (XIAO 5V input)
+
+NET: GND (STAR POINT)
+  J1.2 (power return, GX12 pin 2)
+  → D1.K (TVS cathode, CRITICAL)
+  → D2.K (Schottky cathode)
+  → C1.- (bulk cap negative)
+  → C2.- (decoupling 1)
+  → C3.- (decoupling 2)
+  → C4.- (HF bypass 1)
+  → C5.- (HF bypass 2)
+  → C6.- (HF bypass 3)
+  → Q1.G (P-FET gate pull-down, through R5)
+  → R5.2 (gate resistor to ground)
+  → J2.2 (sensor GND)
+  → U1.GND (XIAO ground pins)
+  → SW1.2 (button return)
+
+### Soft-Start Control
+NET: SOFT_START
+  Q1.D (P-FET drain)
+  → J2.1 (sensor +5V control via FET)
+
+NET: SOFT_START_RC
+  Q1.G (P-FET gate)
+  ← R5.1 (100kΩ from +5V)
+  → GND (through body of FET during charge)
+
+### UART Communication (GPIO20, GPIO21)
+NET: UART_TX (GPIO21)
+  U1.TX_OUT (XIAO UART1 TX)
+  → R3.1 (10kΩ divider upper)
+  → R4.1 (20kΩ divider lower)
+  → M12_TX (sensor TX pin via divider, 5V→3.3V)
+
+NET: UART_RX (GPIO20)
+  U1.RX_IN (XIAO UART1 RX)
+  ← R1.2 (100Ω series protection)
+  ← FB (ferrite bead UART isolation)
+  ← J2.4 (sensor RX pin)
+
+NET: UART_TX_DIVIDER_MID
+  R3.2 (10kΩ lower connection)
+  R4.2 (20kΩ lower connection)
+  → GND (common divider point, creates 1.67V output from 5V input)
+
+### Reset & Control
+NET: RESET (GPIO8)
+  U1.RESET_PIN (XIAO reset input)
+  ← SW1.1 (tactile button)
+  ← R6.1 (10kΩ pull-up, optional, already internal in XIAO)
+
+---
+
+## CONNECTION SUMMARY
+
+### GX12 Power Connector (J1) — 2 pins
+Pin 1: +5V input  → Polyfuse F1
+Pin 2: GND return → Star ground point
+
+### M12 Sensor Connector (J2) — 4 pins
+Pin 1: +5V (sensor power)
+Pin 2: GND (sensor ground)
+Pin 3: RX (from sensor, via ferrite + divider)
+Pin 4: TX (to sensor, via divider 5V→3.3V)
+
+### XIAO ESP32-C6 (U1) — 20-pin module
+VCC: +5V input (regulated to 3.3V internally)
+GND: Ground (star point)
+GPIO21 (D3): UART1 TX → Voltage divider → Sensor
+GPIO20 (D9): UART1 RX ← Ferrite bead ← Sensor
+GPIO8 (D0): Reset button input
+GPIO15: Status LED (optional, onboard)
+
+### Capacitor Placement (Decoupling Cascade)
+C1 (680µF): Right at GX12 connector input (bulk storage)
+C2, C3 (100µF): Left and right of XIAO module (mid-range decoupling)
+C4, C5, C6 (100nF): Close to XIAO VCC pins (high-frequency bypass)
+
+---
+
+## ELECTRICAL CHARACTERISTICS
+
+### Soft-Start RC Circuit (Q1 + R5)
+Purpose: Limit inrush current during power-up
+- P-FET source connects to +5V (via polyfuse)
+- P-FET gate pulls up through R5 (100kΩ) during startup
+- Inrush limited to: I_max ≈ 5V / R_total < 1A over ~100ms
+- Time constant: τ ≈ 100kΩ × C_load (dominated by bulk cap C1 = 680µF)
+- τ ≈ 100k × 680µ ≈ 68 seconds (no!), actually limited by polyfuse holding current
+
+Correction: The R5 value creates soft RC, but the main current limiting is the polyfuse F1.
+Polyfuse holds current at 1.1A, creates soft slope instead of hard click.
+
+### Voltage Divider (R3, R4) — 5V to 3.3V
+- R3 = 10kΩ (upper), R4 = 20kΩ (lower)
+- Ratio: V_out = 5V × 20kΩ / (10kΩ + 20kΩ) = 5V × 2/3 ≈ 3.33V
+- Load: XIAO GPIO20 input impedance ≈ 1MΩ
+- Thevenin: R_th = 10kΩ || 20kΩ ≈ 6.67kΩ
+- τ = 6.67kΩ × C_parasitic ≈ negligible (very fast)
+
+### Ferrite Bead (FB)
+- Impedance: 1000Ω @ 100MHz
+- Purpose: Attenuate sensor switching transients (40 kHz + harmonics)
+- Series insertion on sensor RX line blocks high-frequency noise
+
+### Decoupling Network
+- C1 (680µF): 1 Hz – 10 Hz (bulk storage, ESR provides damping)
+- C2, C3 (100µF): 10 Hz – 100 Hz (mid-range decoupling)
+- C4, C5, C6 (100nF): 100 Hz – 1 GHz (high-frequency bypass)
+- Target impedance: < 100 mΩ across all frequencies
+
+---
+
+## SIGNAL INTEGRITY NOTES
+
+### UART Traces (GPIO20, GPIO21)
+- Route away from high-frequency WiFi switching circuitry
+- Minimize trace length on the 5V side (before divider)
+- Place ferrite bead close to sensor connector (J2) to maximize effectiveness
+- Use ground plane for return path (minimize loop area)
+
+### Power Traces (+5V, GND)
+- +5V from polyfuse: Use 20-mil (0.5mm) trace width minimum
+- GND from star point: Use 20-mil (0.5mm) trace width minimum
+- Multiple vias to ground plane every 2-3cm to reduce impedance
+- Star ground point: Connect polyfuse GND, TVS cathode, and GND plane at single junction
+
+### Sensor Power (to J2.1)
+- Direct connection from Q1 drain (P-FET) to sensor +5V
+- No additional filtering needed (decoupling at main rail is sufficient)
+- Ferrite bead on sensor RX blocks any return-path noise
+
+---
+
+## VERIFICATION CHECKLIST
+
+Before PCB layout:
+- [ ] All nets connected (no unconnected pins)
+- [ ] Star ground point clearly marked (J1.2 junction)
+- [ ] Soft-start RC components present (Q1, R5)
+- [ ] Voltage divider (R3, R4) configured correctly (5V → 3.3V)
+- [ ] Ferrite bead in series with sensor RX
+- [ ] Decoupling capacitors assigned to correct power nets
+- [ ] UART TX/RX nets match GPIO21/GPIO20 respectively
+- [ ] M12 connector pin assignment verified (1=5V, 2=GND, 3=RX, 4=TX)
+- [ ] GX12 connector pin assignment verified (1=+5V, 2=GND)
+
+---
+
+## KiCad Import Instructions
+
+1. Open KiCad Schematic Editor
+2. Create new schematic: File → New → Schematic
+3. Add components by symbol name (see COMPONENT REFERENCE LIST above)
+4. Wire connections per NET LIST section
+5. Assign net labels to all connections:
+   - Ctrl+H (add net label)
+   - Type net name (e.g., "+5V", "GND", "UART_TX", etc.)
+6. Generate netlist: Tools → Generate Netlist
+7. Verify: Tools → Electrical Rules Check (ERC)
+8. Export: File → Export as PDF (for documentation)
+
+---
+
+**Status:** Ready for KiCad schematic creation
+**Next Step:** PCB layout (Phase 1B-2)

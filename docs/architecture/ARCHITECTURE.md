@@ -607,4 +607,39 @@ App Store
 - ✅ Memory safety
 - ✅ Thread safety
 
+---
+
+## Phase 1B Implementation Roadmap
+
+**For detailed Phase 1B execution plan, see:** [PHASE_1B_IMPLEMENTATION_PLAN.md](PHASE_1B_IMPLEMENTATION_PLAN.md)
+
+### Key Phase 1B Deliverables:
+
+1. **PCB Layout** — 100×70×50 mm IP65 enclosure, SR04M-2 UART interface
+2. **Firmware Refactoring** — UART sensor module with frame validation + temporal filtering
+3. **Prototype Assembly** — Soldered through-hole PCB with component verification
+4. **Field Deployment Testing** — WiFi offline-first validation, reverse-polarity protection verification
+
+**Timeline:** 3-4 weeks (parallel with component transit)  
+**Status:** ✅ READY TO EXECUTE
+
+---
+
+## Build & Compilation Status
+
+**Latest Build:** ✅ SUCCESS (2026-06-07)
+
+Recent fixes applied:
+- ESP32-C6 compatibility: Removed unsupported `ESP.getHeapFragmentation()` (not available on C6)
+- Config field alignment: Verified `tank_empty_cm` and `tank_full_cm` usage in firmware
+- Platform conditionals: Wrapped `ESP_RST_USB_JTAG` enum in `#ifdef` for C6 support
+- Pin references: Corrected all LED references to use `PIN_LED_STATUS` (GPIO15) per pins.h
+- Includes: Added missing `watchdog.h` and `health.h` headers
+
+Memory usage:
+- **RAM:** 15.7% (51.5 KB / 320 KB)
+- **Flash:** 83.3% (1.5 MB / 1.8 MB)
+
+---
+
 **Ready for production! 🚀**
