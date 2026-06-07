@@ -123,7 +123,7 @@ static float applyTemporalFilter(float rawDist) {
     float mean = sum / (HISTORY_SIZE - 2);
 
     // Plausibility check: reject if raw differs from mean by >2cm
-    if (fabs(rawDist - mean) > 20.0f) {
+    if (fabsf(rawDist - mean) > 20.0f) {
         Serial.printf("[Filter] PLAUSIBLE_REJECT: raw=%.1f cm, mean=%.1f cm (>2cm threshold)\n",
                       rawDist, mean);
         gDiag.lastFilteredDist = mean;
