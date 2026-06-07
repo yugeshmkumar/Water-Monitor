@@ -157,7 +157,7 @@ final class BLEService: NSObject {
                 merged.firmwareVersion = cfg.firmwareVersion
                 liveStatus = merged
                 onConfigReceived?(cfg)
-                print("[BLE] AA03 config decoded: node=\(cfg.nodeID) empty=\(cfg.tankEmptyCM) full=\(cfg.tankFullCM)")
+                print("[BLE] AA03 config decoded: node=\(cfg.nodeID) empty=\(cfg.tankEmptyMM)mm full=\(cfg.tankFullMM)mm")
             } catch {
                 print("[BLE] ❌ AA03 decode error: \(error)")
             }

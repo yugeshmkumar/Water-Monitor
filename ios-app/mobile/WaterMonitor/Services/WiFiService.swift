@@ -111,11 +111,25 @@ final class WiFiService: DeviceService {
         }
     }
 
+    func fetchDiagnostics() async throws -> DeviceDiagnostics {
+        do {
+            let diag = try await get(path: "/api/diagnostics", as: DeviceDiagnostics.self)
+            lastError = nil
+            return diag
+        } catch {
+            lastError = error
+            if !isTimeoutError(error) {
+                print("[WiFi] fetchDiagnostics failed: \(error.localizedDescription)")
+            }
+            throw error
+        }
+    }
+
     func patchConfig(_ patch: [String: Any]) async throws {
         do {
             try await post(path: "/api/config", body: patch)
             lastError = nil
-            
+
             // Only fetch if WebSocket is disconnected (otherwise it will push update)
             if !isConnected {
                 print("[WiFi] Config patched, fetching updated config...")

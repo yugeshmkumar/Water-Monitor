@@ -5,8 +5,6 @@ final class ConfigVM {
     var edited: DeviceConfig = DeviceConfig()
     var isSaving: Bool = false
 
-    let availablePins = ["D0","D1","D2","D3","D4","D5","D6","D7","D8","D9","D10"]
-
     private var cm: ConnectionManager?
 
     init() {}
@@ -37,8 +35,6 @@ final class ConfigVM {
     func reboot() {
         cm?.sendCommand(["cmd": "reboot"])
     }
-
-    var pinsConflict: Bool { edited.pinTrig == edited.pinEcho }
 
     private func asDictionary(_ c: DeviceConfig) -> [String: Any] {
         guard let data = try? JSONEncoder().encode(c),
