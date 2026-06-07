@@ -106,9 +106,10 @@ void ApiServer::_onWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
     if (type == WS_EVT_CONNECT) {
         Serial.printf("[WS] Client #%u connected\n", client->id());
         // Send current state immediately on connect (complete status matching /api/status)
-        DeviceState snap;
+        // Initialize with safe defaults before attempting semaphore
+        DeviceState snap = gState;  // Copy default values
         if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(50))) {
-            snap = gState;
+            snap = gState;  // Update with latest protected values
             xSemaphoreGive(gStateMutex);
         }
         char buf[256];
@@ -138,9 +139,10 @@ void ApiServer::_onWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
 void ApiServer::_setupRest() {
     // GET /api/status
     _http.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req) {
-        DeviceState snap;
+        // Initialize with safe defaults before attempting semaphore
+        DeviceState snap = gState;  // Copy default values
         if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(50))) {
-            snap = gState;
+            snap = gState;  // Update with latest protected values
             xSemaphoreGive(gStateMutex);
         }
         char buf[256];
@@ -190,9 +192,17 @@ void ApiServer::_setupRest() {
 
     // GET /api/diagnostics — comprehensive system diagnostics
     _http.on("/api/diagnostics", HTTP_GET, [](AsyncWebServerRequest* req) {
-        DeviceState snap;
+        // Initialize with safe defaults before attempting semaphore
+        DeviceState snap = gState;  // Copy default values
+
+        // Take mutex once to get consistent snapshot of both state AND config
+        float tankEmptyCm = config.d.tank_empty_cm;
+        float tankFullCm = config.d.tank_full_cm;
+        uint32_t pollIntervalS = config.d.poll_interval_s;
+        bool testingMode = config.d.testing_mode;
+
         if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(50))) {
-            snap = gState;
+            snap = gState;  // Update with latest protected values
             xSemaphoreGive(gStateMutex);
         }
 
@@ -236,12 +246,12 @@ void ApiServer::_setupRest() {
         system["psram_free"] = psramFree;
         system["fw_version"] = String(config.d.firmware_version);
 
-        // Configuration state
+        // Configuration state (snapshot captured above)
         JsonObject config_state = doc["config"].to<JsonObject>();
-        config_state["tank_empty_cm"] = config.d.tank_empty_cm;
-        config_state["tank_full_cm"] = config.d.tank_full_cm;
-        config_state["poll_interval_s"] = config.d.poll_interval_s;
-        config_state["testing_mode"] = config.d.testing_mode;
+        config_state["tank_empty_cm"] = tankEmptyCm;
+        config_state["tank_full_cm"] = tankFullCm;
+        config_state["poll_interval_s"] = pollIntervalS;
+        config_state["testing_mode"] = testingMode;
 
         String body;
         serializeJson(doc, body);
@@ -280,16 +290,13 @@ void ApiServer::_setupRest() {
             char resultBuf[128];
             handlePinCommand(body.c_str(), resultBuf, sizeof(resultBuf));
 
-            // Deferred commands: send response first, then act
+            // Deferred commands: for factory reset, check error BEFORE response
             bool isReboot = (strcmp(json["cmd"] | "", "reboot") == 0);
             bool isFactoryReset = (strcmp(json["cmd"] | "", "factory_reset") == 0);
 
-            req->send(200, "application/json", resultBuf);
-
-            delay(500);
+            // Factory reset error check (before response, to send proper status code)
             if (isFactoryReset) {
                 Serial.println("[API] Factory reset requested — clearing NVS and queue...");
-                // Clear all NVS data
                 esp_err_t err = nvs_flash_erase();
                 if (err != ESP_OK) {
                     Serial.printf("[API] ERROR: nvs_flash_erase() failed with code %d\n", err);
@@ -297,6 +304,13 @@ void ApiServer::_setupRest() {
                               "{\"ok\":false,\"error\":\"nvs_erase_failed\",\"detail\":\"flash operation failed\"}");
                     return;
                 }
+            }
+
+            // Send response after error check
+            req->send(200, "application/json", resultBuf);
+
+            delay(500);
+            if (isFactoryReset) {
                 // Clear queue
                 queueStore.clear();
                 delay(500);
