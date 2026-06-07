@@ -13,7 +13,7 @@ struct ConfigWizardView: View {
     @State private var configTimeout = false
     @State private var timeoutTask: Task<Void, Never>?
 
-    private let steps = ["WiFi", "Tank", "Pins"]
+    private let steps = ["WiFi", "Tank"]
 
     var body: some View {
         NavigationStack {
@@ -114,10 +114,8 @@ struct ConfigWizardView: View {
     private var stepContent: some View {
         if step == 0 {
             wifiForm
-        } else if step == 1 {
-            tankForm
         } else {
-            PinConfigView(isEmbedded: true)
+            tankForm
         }
     }
 
@@ -171,7 +169,7 @@ struct ConfigWizardView: View {
                         Text("Empty point")
                             .font(.subheadline)
                         Spacer()
-                        Text(String(format: "%.1f cm", edited.tankEmptyCM))
+                        Text(String(format: "%.0f mm", edited.tankEmptyMM))
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                     }
@@ -180,17 +178,17 @@ struct ConfigWizardView: View {
                         Text("Full point")
                             .font(.subheadline)
                         Spacer()
-                        Text(String(format: "%.1f cm", edited.tankFullCM))
+                        Text(String(format: "%.0f mm", edited.tankFullMM))
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                     }
 
-                    let range = edited.tankEmptyCM - edited.tankFullCM
+                    let range = edited.tankEmptyMM - edited.tankFullMM
                     HStack {
                         Text("Range")
                             .font(.subheadline)
                         Spacer()
-                        Text(String(format: "%.1f cm", range))
+                        Text(String(format: "%.0f mm", range))
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                     }

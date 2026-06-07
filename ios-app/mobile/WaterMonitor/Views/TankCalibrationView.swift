@@ -17,8 +17,8 @@ struct TankCalibrationView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var lastReadingTime: Date?
-    @State private var calculatedFullCM: Double?  // ✅ Store calculated values to display
-    @State private var calculatedEmptyCM: Double?
+    @State private var calculatedFullMM: Double?  // ✅ Store calculated values to display (in millimeters)
+    @State private var calculatedEmptyMM: Double?
     
     // ✅ Task management for proper cancellation
     @State private var liveReadingTask: Task<Void, Never>?
@@ -367,11 +367,11 @@ struct TankCalibrationView: View {
                 Divider().padding(.vertical, 4)
                 
                 Text("Calculated Tank Boundaries:").font(.caption.bold())
-                resultRow("Full Point (100%)", calculatedFullCM ?? 0)
+                resultRow("Full Point (100%)", calculatedFullMM ?? 0, unit: "mm")
                 Divider()
-                resultRow("Empty Point (0%)", calculatedEmptyCM ?? 0)
+                resultRow("Empty Point (0%)", calculatedEmptyMM ?? 0, unit: "mm")
                 Divider()
-                resultRow("Tank Range", (calculatedEmptyCM ?? 0) - (calculatedFullCM ?? 0))
+                resultRow("Tank Range", (calculatedEmptyMM ?? 0) - (calculatedFullMM ?? 0), unit: "mm")
             }
             .padding()
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -485,11 +485,12 @@ struct TankCalibrationView: View {
         }
     }
 
-    private func resultRow(_ label: String, _ value: Double) -> some View {
+    private func resultRow(_ label: String, _ value: Double, unit: String = "cm") -> some View {
         HStack {
             Text(label).font(.caption).foregroundStyle(.secondary)
             Spacer()
-            Text(String(format: "%.1f cm", value)).font(.caption.bold().monospaced())
+            let format = unit == "mm" ? "%.0f %@" : "%.1f %@"
+            Text(String(format: format, value, unit)).font(.caption.bold().monospaced())
         }
     }
 
@@ -595,12 +596,12 @@ struct TankCalibrationView: View {
             let range = 100.0 * (dist2 - dist1) / (pct1 - pct2)
             let emptyCM = dist1 + (pct1 / 100.0) * range
             let fullCM = emptyCM - range
-            
-            // ✅ Store for display
-            calculatedEmptyCM = emptyCM
-            calculatedFullCM = fullCM
-            
-            print("[Calibration] Calculated: tank_full_cm=\(fullCM), tank_empty_cm=\(emptyCM)")
+
+            // ✅ Store for display (convert CM to MM)
+            calculatedEmptyMM = emptyCM * 10.0
+            calculatedFullMM = fullCM * 10.0
+
+            print("[Calibration] Calculated: tank_full_cm=\(fullCM), tank_empty_cm=\(emptyCM) (storing as MM: empty=\(calculatedEmptyMM ?? 0), full=\(calculatedFullMM ?? 0))")
             print("[Calibration] Range: \(range) cm")
 
             // Validation
