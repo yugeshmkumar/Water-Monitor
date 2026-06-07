@@ -432,6 +432,9 @@ void setup() {
     xTaskCreatePinnedToCore(bleTask,    "ble",    10240, NULL, 1, NULL, 1);
     xTaskCreatePinnedToCore(healthTask, "health", 4096, NULL, 1, NULL, 1);
 
+    // Register main task with watchdog for health monitoring
+    watchdog.registerTask("main", xTaskGetCurrentTaskHandle(), 15000);
+
     // Feed watchdog on startup
     watchdog.feed("main");
 
