@@ -1,0 +1,15 @@
+# KiCad temporary/generated files (don't commit these)
+.history/
+*.bak
+*.tmp
+*~
+.~*
+
+# KiCad backup files
+*-bak.kicad_sch
+*-bak.kicad_pcb
+*-bak.kicad_pro
+
+# OS files
+.DS_Store
+Thumbs.db
