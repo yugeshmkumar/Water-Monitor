@@ -16,7 +16,10 @@
       "Bash(nc -w 5 192.168.1.168 80)",
       "Skill(code-review)",
       "Skill(code-review:*)",
-      "Bash(pio check *)"
+      "Bash(pio check *)",
+      "Bash(pip3 install *)",
+      "Bash(/Users/yugeshmluv/Library/Python/3.9/bin/pio run *)",
+      "Bash(tee /tmp/compile.log)"
     ],
     "additionalDirectories": [
       "/Users/yugeshmluv/Work/Projects/code/water-monitor/firmware/tank-sensor",
