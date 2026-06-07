@@ -38,7 +38,7 @@ static void mqttEnsureConnected() {
         if (now - lastMqttAttempt >= mqttBackoffMs) {
             if (!mqttClient.connect(config.d.node_id)) {
                 // Failed: increase backoff (double, capped at 60s)
-                mqttBackoffMs = (uint16_t)min(mqttBackoffMs * 2, 60000UL);
+                mqttBackoffMs = (uint16_t)min((uint32_t)(mqttBackoffMs * 2), 60000UL);
             } else {
                 // Connected: reset backoff
                 mqttBackoffMs = 1000;
