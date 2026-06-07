@@ -1,10 +1,64 @@
 # Changelog - What Was Fixed
 
-## 📅 Date: 2026-06-06
+## 📅 Latest Update: 2026-06-08
 
 ## 🎯 Overview
 
 This changelog documents all bug fixes and improvements made to the WaterMonitor / Zenovaa CONNECT app.
+
+---
+
+## 🆕 Recent Fixes (2026-06-08)
+
+### Fix #4: Missing Logo Error - Placeholder Added ✅
+
+**Issue:**
+```
+No image named 'ZenovaaLogo' found in asset catalog
+```
+
+**What was wrong:**
+- Splash screen code referenced `Image("ZenovaaLogo")`
+- But asset was never added to `Assets.xcassets`
+- Console showed error on every app launch
+
+**Fix applied:**
+Updated `ContentView.swift` to use fallback placeholder:
+
+```swift
+if let _ = UIImage(named: "ZenovaaLogo") {
+    // Use custom logo if available
+    Image("ZenovaaLogo")
+        .resizable()
+        .scaledToFit()
+        .frame(width: 120, height: 120)
+} else {
+    // Fallback to SF Symbol placeholder
+    ZStack {
+        RoundedRectangle(cornerRadius: 28)
+            .fill(gradient)
+            .frame(width: 120, height: 120)
+        
+        Image(systemName: "drop.circle.fill")
+            .font(.system(size: 60))
+            .foregroundStyle(.white)
+    }
+}
+```
+
+**Result:**
+- ✅ No more console errors
+- ✅ Splash screen shows placeholder (blue square + water drop icon)
+- ✅ App works correctly without custom logo asset
+- ⏳ Can add real logo later to `Assets.xcassets`
+
+**Status:** Temporary fix in place, real logo asset still needed
+
+**See:** `LOGO_MISSING_FIX.md` for how to add your actual logo
+
+---
+
+## 📅 Original Fixes (2026-06-06)
 
 ---
 
