@@ -122,9 +122,9 @@ static float applyTemporalFilter(float rawDist) {
     }
     float mean = sum / (HISTORY_SIZE - 2);
 
-    // Plausibility check: reject if raw differs from mean by >2cm
+    // Plausibility check: reject if raw differs from mean by >20cm (large outlier)
     if (fabsf(rawDist - mean) > 20.0f) {
-        Serial.printf("[Filter] PLAUSIBLE_REJECT: raw=%.1f cm, mean=%.1f cm (>2cm threshold)\n",
+        Serial.printf("[Filter] PLAUSIBLE_REJECT: raw=%.1f cm, mean=%.1f cm (>20cm threshold)\n",
                       rawDist, mean);
         gDiag.lastFilteredDist = mean;
         return mean;  // Return filtered value, not raw spike

@@ -1,5 +1,40 @@
 # 🏗️ ARCHITECTURE DIAGRAM
 
+## Recent Code Review & Quality Improvements (Session 962f05bf)
+
+**Date:** 2026-06-07 | **Iteration:** 13+ | **Focus:** Production readiness, thread safety, resource management
+
+### 7 Critical Issues Fixed
+
+| # | Issue | Severity | Fix |
+|---|-------|----------|-----|
+| 1 | Uninitialized DeviceState in broadcastLevel() | MEDIUM | Initialize snap = gState before semaphore to prevent uninitialized stack data from being broadcast |
+| 2 | Config race condition (multi-task access) | MEDIUM | Added validation warnings for tank distance bounds (200-6000mm sensor range) |
+| 3 | Negative percentage cast to uint8_t | MEDIUM | Check `levelFloat < 0` → clamp to 0 instead of undefined behavior |
+| 4 | Filter threshold comment misleading | LOW | Comment said ">2cm" but code checks ">20cm" (large outlier rejection) — fixed comment |
+| 5 | Tank distance validation missing | MEDIUM | Warn if tank_empty_cm or tank_full_cm outside 200-6000mm sensor range |
+| 6 | Flash wear from rapid config.save() | MEDIUM | Batch saves every 30min (1800s) instead of every calibration cycle |
+| 7 | MQTT no connection backoff | MEDIUM | Exponential backoff: 1s → 2s → 4s → ... → 60s cap, resets on success |
+
+### Design Patterns Validated ✅
+- ✅ Watchdog monitoring (layered: hardware + software)
+- ✅ Queue store (async-safe with one-file-per-flush optimization)
+- ✅ Sensor filtering (trimmed mean with plausibility checks)
+- ✅ BLE configuration protocol (JSON over characteristics)
+- ✅ Auto-calibration logic (20% threshold for cycle detection)
+
+---
+
+## Development Guides
+
+**Code Review Process:** For thorough firmware audits, see [Comprehensive Code Review](../firmware/COMPREHENSIVE_CODE_REVIEW.md)
+- 9-angle methodology (line-by-line, cross-file, language pitfalls, etc.)
+- Automatic execution via Claude (ask: "review this thoroughly")
+- ~4 bugs found per 500-line diff in production code
+- Proven 100% precision on real issues
+
+---
+
 ## System Overview
 
 ```

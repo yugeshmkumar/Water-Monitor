@@ -22,6 +22,8 @@ SemaphoreHandle_t gStateMutex;
 static WiFiClient   wifiClient;
 static PubSubClient mqttClient(wifiClient);
 static bool         mqttConfigured = false;
+static unsigned long lastMqttAttempt = 0;  // Exponential backoff timer
+static uint16_t     mqttBackoffMs = 1000;   // Start at 1s, cap at 60s
 
 static void mqttEnsureConnected() {
     if (strlen(config.d.mqtt_broker_ip) == 0) return;
@@ -31,7 +33,21 @@ static void mqttEnsureConnected() {
         mqttConfigured = true;
     }
     if (!mqttClient.connected()) {
-        mqttClient.connect(config.d.node_id);
+        // Exponential backoff: retry after delay, cap at 60s
+        unsigned long now = millis();
+        if (now - lastMqttAttempt >= mqttBackoffMs) {
+            if (!mqttClient.connect(config.d.node_id)) {
+                // Failed: increase backoff (double, capped at 60s)
+                mqttBackoffMs = (uint16_t)min(mqttBackoffMs * 2, 60000UL);
+            } else {
+                // Connected: reset backoff
+                mqttBackoffMs = 1000;
+            }
+            lastMqttAttempt = now;
+        }
+    } else {
+        // Connected: reset backoff for next connection attempt
+        mqttBackoffMs = 1000;
     }
 }
 
@@ -122,6 +138,7 @@ static void sensorTask(void* pv) {
     float lastLevel = 50.0f;  // last known level %
     uint32_t cycleStartTs = 0;
     unsigned long lastSensorFeed = millis();
+    unsigned long lastConfigSave = millis();  // Batch config saves to reduce flash wear
 
     while (true) {
         // Feed watchdog periodically (at least every 15 seconds)
@@ -143,11 +160,12 @@ static void sensorTask(void* pv) {
         float emptyDist_cm = config.d.tank_empty_cm;
         float fullDist_cm = config.d.tank_full_cm;
 
-        Serial.printf("[Sensor] Valid reading: %.1f cm → %u%% (empty=%.1f, full=%.1f cm)\n",
-                      dist, (uint8_t)computeLevelPct(dist, emptyDist_cm, fullDist_cm),
-                      emptyDist_cm, fullDist_cm);
+        float levelFloat = computeLevelPct(dist, emptyDist_cm, fullDist_cm);
+        uint8_t pct = (levelFloat < 0.0f) ? 0 : (uint8_t)levelFloat;  // Handle error case (negative → 0)
 
-        uint8_t pct = (uint8_t)computeLevelPct(dist, emptyDist_cm, fullDist_cm);
+        Serial.printf("[Sensor] Valid reading: %.1f cm → %u%% (empty=%.1f, full=%.1f cm)\n",
+                      dist, pct,
+                      emptyDist_cm, fullDist_cm);
 
         if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(100))) {
             gState.distance_cm = dist;
@@ -185,7 +203,11 @@ static void sensorTask(void* pv) {
                             (int)config.d.calibration_confidence + 10, 90
                         );
                     }
-                    config.save();
+                    // Batch saves every 30 min to reduce flash wear (wear leveling)
+                    if (millis() - lastConfigSave > 1800000UL) {
+                        config.save();
+                        lastConfigSave = millis();
+                    }
                     Serial.printf("[AutoCal] Cycle %u detected, confidence now %u%%\n",
                                   config.d.calibration_cycles, config.d.calibration_confidence);
                 }

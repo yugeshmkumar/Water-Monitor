@@ -83,6 +83,15 @@ bool Config::applyPartialJson(const char* json) {
         Serial.println("[Config] WARNING: Invalid calibration (empty≈full). Rejecting calibration update.");
         return false;
     }
+    
+    // Validate tank distances are within sensor range (200-6000mm)
+    if (d.tank_empty_cm < 20.0f || d.tank_empty_cm > 600.0f ||
+        d.tank_full_cm < 20.0f || d.tank_full_cm > 600.0f) {
+        Serial.printf("[Config] WARNING: Tank distances out of sensor range (200-6000mm). empty=%u, full=%u\n",
+                      (uint16_t)(d.tank_empty_cm * 10), (uint16_t)(d.tank_full_cm * 10));
+        // Continue anyway - user may have intentional configuration
+    }
+    
     if (!doc["tank_volume_l"].isNull())        d.tank_volume_l        = doc["tank_volume_l"].as<uint32_t>();
     if (!doc["alert_low_pct"].isNull())        d.alert_low_pct        = doc["alert_low_pct"].as<uint8_t>();
     if (!doc["alert_high_pct"].isNull())       d.alert_high_pct       = doc["alert_high_pct"].as<uint8_t>();

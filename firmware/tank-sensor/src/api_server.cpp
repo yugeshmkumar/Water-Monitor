@@ -66,9 +66,10 @@ void ApiServer::loop() {
 void ApiServer::broadcastLevel(float distCM, uint8_t levelPct, uint32_t ts) {
     if (_ws.count() == 0) return;
 
-    DeviceState snap;
+    // Initialize with safe defaults before attempting semaphore
+    DeviceState snap = gState;  // Copy default values
     if (xSemaphoreTake(gStateMutex, pdMS_TO_TICKS(50))) {
-        snap = gState;
+        snap = gState;  // Update with latest protected values
         xSemaphoreGive(gStateMutex);
     }
 
