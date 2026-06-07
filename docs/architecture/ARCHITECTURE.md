@@ -72,47 +72,53 @@
 
 ---
 
-## Firmware Sensor Pipeline (ESP32-C6)
+## Firmware Sensor Pipeline (ESP32-C6) — Rev G
 
-### JSN-SR04T Distance Validation Flow
+### SR04M-2 (Triggered UART) Distance Validation Flow
 
 ```
-Hardware (Ultrasonic Sensor)
-       ↓  5 pulses @ 60ms intervals
+Hardware (SR04M-2 Ultrasonic Sensor on triggered UART)
+       │
+       ├─ MCU sends 0x55 (trigger command) on GPIO21 TX
+       │
+       ▼ Sensor processes (120 µs)
+       │
+       ├─ Sensor fires 40 kHz burst, times echo
+       │
+       ▼ Sensor replies with 0xFF, DataH, DataL, SUM
+       │
+       ├─ MCU reads on GPIO20 RX (9600 baud, 4 bytes)
        │
        ▼
-┌─────────────────────────────┐
-│  Multi-Sample Median        │
-│  (N=5, insertion sort)      │
-│  Reject if <3 valid pulses  │
-└────────────┬────────────────┘
+┌─────────────────────────────────────┐
+│  Frame Validation                   │
+│  • Sync: 0xFF at start             │
+│  • Checksum: (0xFF+H+L) & 0xFF == SUM │
+│  • Distance: (H<<8) | L (mm)        │
+│  • Bounds: 200 mm ≤ dist ≤ 6000 mm │
+│  Reject if any check fails          │
+└────────────┬────────────────────────┘
              │
              ▼
-     ┌───────────────────┐
-     │ Testing Mode?     │
-     │ (bypass filter)   │
-     └──┬─────────┬──────┘
-        │ No      │ Yes
-        │         └──────▶ [Return raw median]
-        │
-        ▼
 ┌──────────────────────────────────────────────┐
 │   Statistical ML Validator                   │
+│   (Dual-criterion rejection + online learning)│
 │                                              │
 │  ┌──────────────────────────────────────┐  │
 │  │ Phase 1: Warmup (first 30 readings)  │  │
-│  │ • Collect → Sort → Trim 10%         │  │
-│  │ • Seed Welford mean/variance        │  │
-│  │ • Initialize 8-point trend buffer   │  │
-│  │ Returns: -1.0 (not ready yet)       │  │
+│  │ • Collect valid frames                │  │
+│  │ • Sort → Trim 10% outliers           │  │
+│  │ • Seed Welford mean/variance         │  │
+│  │ • Initialize 8-point trend buffer    │  │
+│  │ Returns: -1.0 (not ready)            │  │
 │  └──────────────────────────────────────┘  │
 │                                              │
 │  ┌──────────────────────────────────────┐  │
 │  │ Phase 2: Validation (dual-criterion) │  │
 │  │ Criterion A: |reading - mean| > 2σ   │  │
 │  │ Criterion B: |reading - predicted| > 2σ │
-│  │ (B active after 4 trend readings)   │  │
-│  │ Reject if A OR B fires               │  │
+│  │ (B active after 4 trend readings)    │  │
+│  │ Reject if A OR B fires                │  │
 │  └──────────────────────────────────────┘  │
 │                                              │
 │  ┌──────────────────────────────────────┐  │
@@ -123,19 +129,29 @@ Hardware (Ultrasonic Sensor)
 │  └──────────────────────────────────────┘  │
 └────────────┬───────────────────────────────┘
              │
+             ▼ Optional: Temperature Compensation
+             │ (if DS18B20 fitted)
+             │ distance_mm *= (331.4 + 0.6*T) / 343
+             │
              ▼
       [Update gState]
-    distance_cm, level_pct
+    distance_cm, level_pct, sensor_ok
              │
              ▼
 ┌──────────────────────────────────┐
-│  Store + Notify Downstream       │
-│  • LittleFS Queue (offline)      │
-│  • BLE notify (AA01)             │
+│  Store + Notify (Offline-First)  │
+│  • LittleFS Queue (unsent)       │
+│  • BLE notify (UUIDs AA01)       │
 │  • WiFi WebSocket (/live)        │
-│  • MQTT (home/tank/level)        │
+│  • WiFi REST (if available)      │
 └──────────────────────────────────┘
 ```
+
+**Key difference from JSN-SR04T:**
+- Sensor STM8 handles timing (frame-based, not interrupt-driven on ESP)
+- Checksum validation catches corruption (99.6% error detection)
+- No MCU-side pulse width measurement jitter
+- Cleaner firmware, better reliability in WiFi-heavy environment
 
 ### Validator State (\~200 bytes)
 
